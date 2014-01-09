@@ -197,16 +197,36 @@ public final class CompilationServer implements Runnable {
    * @return the server scheme, name, and port, such as "http://localhost:9810/"
    */
   public String getServerForExchange(HttpExchange exchange) {
-    URI referrer = HttpUtil.getReferrer(exchange);
-    String scheme;
-    String host;
-    if (referrer == null) {
-      scheme = "http";
-      host = "localhost";
-    } else {
-      scheme = referrer.getScheme();
-      host = referrer.getHost();
-    }
-    return String.format("%s://%s:%d/", scheme, host, this.port);
+      URI referrer = HttpUtil.getReferrer(exchange);
+      int port = this.port;
+      String scheme = "http";
+      String host = "localhost";
+
+      if(referrer instanceof URI) {
+          scheme = referrer.getScheme();
+          host = referrer.getHost();
+      }
+
+      // Support reverse proxy
+      String xfor_host  = HttpUtil.getRequestHeader("X-Forwarded-Host"  , exchange);
+      String xfor_proto = HttpUtil.getRequestHeader("X-Forwarded-Proto" , exchange);
+      String xfor_port  = HttpUtil.getRequestHeader("X-Forwarded-Port"  , exchange);
+
+      if(xfor_host instanceof String) {
+          host = xfor_host;
+      }
+
+      if(xfor_proto instanceof String) {
+          scheme = xfor_proto;
+      }
+
+      if(xfor_port instanceof String) {
+          try {
+              port = Integer.parseInt(xfor_port);
+          } catch(NumberFormatException e) {
+          }
+      }
+
+      return String.format("%s://%s:%d/", scheme, host, port);
   }
 }
