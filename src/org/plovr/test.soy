@@ -2,6 +2,33 @@
 
 /**
  * @param title
+ * @param testJsUrl
+ * @param configId
+ */
+{template .mtest}
+<!doctype html>
+<html>
+<head>
+	<title>{$title} test</title>
+	<script src="/compile?id={$configId|escapeUri}&mode=RAW"></script>
+</head>
+<body>
+	<script>
+		goog.require('goog.async.Deferred');
+		goog.require('goog.testing.jsunit');
+		goog.require('goog.testing.DeferredTestCase');
+	</script>
+	<script src="{$testJsUrl}"></script>
+	<script type="text/javascript">
+		var testCase =
+			goog.testing.DeferredTestCase.createAndInstall(document.title);
+	</script>
+</body>
+</html>
+{/template}
+
+/**
+ * @param title
  * @param baseJsUrl
  * @param testJsUrl
  * @param requires

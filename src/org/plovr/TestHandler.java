@@ -122,10 +122,12 @@ public class TestHandler extends AbstractGetHandler {
         "title", jsFileName,
         "baseJsUrl", baseJsUrl,
         "testJsUrl", testJsUrl,
-        "requires", new SoyListData(testJsInput.getRequires()));
+        "requires", new SoyListData(testJsInput.getRequires()),
+        "configId", config.getId());
 
     SoyTofu testTemplateTofu = getTestTemplateTofu(config);
-    String html = testTemplateTofu.newRenderer("org.plovr.test").setData(
+    String tpl = jsFileName.matches(".*?_m_test\\.js$") ? "org.plovr.mtest" : "org.plovr.test";
+    String html = testTemplateTofu.newRenderer(tpl).setData(
         mapData).render();
     Responses.writeHtml(html, exchange);
     return true;
@@ -164,12 +166,22 @@ public class TestHandler extends AbstractGetHandler {
     Manifest manifest = config.getManifest();
     TreeSet<String> testFilePaths = Sets.newTreeSet();
 
-    for (File dependency : manifest.getDependencies()) {
-      if (!dependency.isDirectory()) {
-        continue;
+    ModuleConfig moduleConfig = config.getModuleConfig();
+
+    if(moduleConfig instanceof ModuleConfig) {
+      TreeSet<File> folderPaths = ModuleConfig.getModuleDependencies(manifest);
+      for (File dependency : folderPaths) {
+        addAllTestFiles(dependency, dependency, testFilePaths,
+            config.getTestExcludePaths());
       }
-      addAllTestFiles(dependency, dependency, testFilePaths,
-          config.getTestExcludePaths());
+    } else {
+      for (File dependency : manifest.getDependencies()) {
+        if (!dependency.isDirectory()) {
+          continue;
+        }
+        addAllTestFiles(dependency, dependency, testFilePaths,
+            config.getTestExcludePaths());
+      }
     }
 
     return testFilePaths;
