@@ -186,6 +186,8 @@ public final class Config implements Comparable<Config> {
 
   private final String language;
 
+  private final Set<Pattern> warningExcludePaths;
+
   /**
    * @param id Unique identifier for the configuration. This is used as an
    *        argument to the &lt;script> tag that loads the compiled code.
@@ -242,7 +244,8 @@ public final class Config implements Comparable<Config> {
       JobDescription.OutputFormat cssOutputFormat,
       PrintStream errorStream,
       File translationsDirectory,
-      String language) {
+      String language,
+      Set<Pattern> warningExcludePaths) {
     Preconditions.checkNotNull(defines);
 
     this.id = id;
@@ -297,6 +300,7 @@ public final class Config implements Comparable<Config> {
     this.errorStream = Preconditions.checkNotNull(errorStream);
     this.translationsDirectory = translationsDirectory;
     this.language = language;
+    this.warningExcludePaths = warningExcludePaths;
   }
 
   public static Builder builder(File relativePathBase, File configFile,
@@ -415,7 +419,7 @@ public final class Config implements Comparable<Config> {
    * in response to an HTTP request.
    */
   public String getJsContentType() {
-    return "text/javascript; charset=" + outputCharset.name();
+    return "application/javascript; charset=" + outputCharset.name();
   }
 
   /**
@@ -559,6 +563,8 @@ public final class Config implements Comparable<Config> {
     return language;
   }
 
+  public Set<Pattern> getWarningExcludePaths() { return warningExcludePaths; }
+
   public List<WebDriverFactory> getWebDriverFactories() {
     return ImmutableList.copyOf(testDrivers);
   }
@@ -569,7 +575,14 @@ public final class Config implements Comparable<Config> {
    * @return the file under a test directory, if it exists, or null
    */
   public @Nullable File getTestFile(String path) {
-    for (File dependency : manifest.getDependencies()) {
+    Set<File> deps;
+    if (moduleConfig == null) {
+      deps = manifest.getDependencies();
+    } else {
+      deps = ModuleConfig.getModuleDependencies(manifest);
+    }
+      
+    for (File dependency : deps) {
       if (!dependency.isDirectory()) {
         continue;
       }
@@ -1052,6 +1065,8 @@ public final class Config implements Comparable<Config> {
 
     private String language = null;
 
+    private Set<Pattern> warningExcludePaths = Sets.newHashSet();
+
     /**
      * Pattern to validate a config id. A config id may not contain funny
      * characters, such as slashes, because ids are used in RESTful URLs, so
@@ -1139,6 +1154,7 @@ public final class Config implements Comparable<Config> {
       this.errorStream = config.errorStream;
       this.translationsDirectory = config.translationsDirectory;
       this.language = config.language;
+      this.warningExcludePaths = config.warningExcludePaths;
     }
 
     /** Directory against which relative paths should be resolved. */
@@ -1542,6 +1558,14 @@ public final class Config implements Comparable<Config> {
       this.language = language;
     }
 
+    public void addWarningExcludePath(Pattern path) {
+      warningExcludePaths.add(path);
+    }
+
+    public void resetWarningExcludePaths() {
+      warningExcludePaths.clear();
+    }
+
     public Config build() {
       File closureLibraryDirectory = pathToClosureLibrary != null
           ? new File(pathToClosureLibrary)
@@ -1652,7 +1676,8 @@ public final class Config implements Comparable<Config> {
           cssOutputFormat,
           errorStream,
           translationsDirectory,
-          language);
+          language,
+          warningExcludePaths);
 
       return config;
     }

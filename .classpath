@@ -24,6 +24,6 @@
 	<classpathentry kind="lib" path="closure/closure-templates/java/lib/javax.inject.jar"/>
 	<classpathentry kind="lib" path="lib/gson-2.2.2.jar"/>
 	<classpathentry kind="lib" path="lib/junit-4.8.2.jar"/>
-	<classpathentry kind="lib" path="lib/selenium-java-2.21.0.jar"/>
+	<classpathentry kind="lib" path="lib/selenium-java-2.47.1.jar"/>
 	<classpathentry kind="output" path="build/classes"/>
 </classpath>
