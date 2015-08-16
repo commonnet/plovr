@@ -1,6 +1,7 @@
 package org.plovr;
 
 import java.io.File;
+import java.io.FilenameFilter;
 import java.io.IOException;
 import java.io.PrintStream;
 import java.lang.reflect.Field;
@@ -17,6 +18,9 @@ import java.util.regex.Pattern;
 
 import javax.annotation.Nullable;
 
+import com.google.template.soy.msgs.SoyMsgBundle;
+import com.google.template.soy.xliffmsgplugin.XliffMsgPlugin;
+import org.plovr.io.Files;
 import org.plovr.util.Pair;
 import org.plovr.webdriver.WebDriverFactory;
 
@@ -178,6 +182,10 @@ public final class Config implements Comparable<Config> {
 
   private final PrintStream errorStream;
 
+  private final File translationsDirectory;
+
+  private final String language;
+
   /**
    * @param id Unique identifier for the configuration. This is used as an
    *        argument to the &lt;script> tag that loads the compiled code.
@@ -232,7 +240,9 @@ public final class Config implements Comparable<Config> {
       String gssFunctionMapProviderClassName,
       File cssOutputFile,
       JobDescription.OutputFormat cssOutputFormat,
-      PrintStream errorStream) {
+      PrintStream errorStream,
+      File translationsDirectory,
+      String language) {
     Preconditions.checkNotNull(defines);
 
     this.id = id;
@@ -285,6 +295,8 @@ public final class Config implements Comparable<Config> {
     this.cssOutputFile = cssOutputFile;
     this.cssOutputFormat = cssOutputFormat;
     this.errorStream = Preconditions.checkNotNull(errorStream);
+    this.translationsDirectory = translationsDirectory;
+    this.language = language;
   }
 
   public static Builder builder(File relativePathBase, File configFile,
@@ -537,6 +549,14 @@ public final class Config implements Comparable<Config> {
 
   public PrintStream getErrorStream() {
     return errorStream;
+  }
+
+  public File getTranslationsDirectory() {
+    return translationsDirectory;
+  }
+
+  public String getLanguage() {
+    return language;
   }
 
   public List<WebDriverFactory> getWebDriverFactories() {
@@ -1028,6 +1048,10 @@ public final class Config implements Comparable<Config> {
 
     private PrintStream errorStream = System.err;
 
+    private File translationsDirectory = null;
+
+    private String language = null;
+
     /**
      * Pattern to validate a config id. A config id may not contain funny
      * characters, such as slashes, because ids are used in RESTful URLs, so
@@ -1113,6 +1137,8 @@ public final class Config implements Comparable<Config> {
       this.cssOutputFile = config.cssOutputFile;
       this.cssOutputFormat = config.cssOutputFormat;
       this.errorStream = config.errorStream;
+      this.translationsDirectory = config.translationsDirectory;
+      this.language = config.language;
     }
 
     /** Directory against which relative paths should be resolved. */
@@ -1508,6 +1534,14 @@ public final class Config implements Comparable<Config> {
       this.errorStream = Preconditions.checkNotNull(errorStream);
     }
 
+    public void setTranslationsDirectory(File translationsDirectory) {
+      this.translationsDirectory = translationsDirectory;
+    }
+
+    public void setLanguage(String language) {
+      this.language = language;
+    }
+
     public Config build() {
       File closureLibraryDirectory = pathToClosureLibrary != null
           ? new File(pathToClosureLibrary)
@@ -1534,8 +1568,26 @@ public final class Config implements Comparable<Config> {
           }
         }
 
+        final String lang = this.language;
+        SoyMsgBundle langBundle = null;
+        if (lang != null && this.translationsDirectory != null) {
+          File[] files = this.translationsDirectory.listFiles(new FilenameFilter() {
+            @Override
+            public boolean accept(File dir, String name) {
+              return name.startsWith(lang) && name.endsWith(".xlf");
+            }
+          });
+          if(files != null && files.length > 0) {
+            try {
+              final String str = Files.toString(files[0]);
+              langBundle = new XliffMsgPlugin().parseTranslatedMsgsFile(str);
+            } catch(IOException ioe) {
+            }
+          }
+        }
+
         SoyFileOptions soyFileOptions = new SoyFileOptions(soyFunctionNames,
-            !this.excludeClosureLibrary, this.soyUseInjectedData);
+            !this.excludeClosureLibrary, this.soyUseInjectedData, langBundle);
 
         manifest = new Manifest(
             excludeClosureLibrary,
@@ -1598,7 +1650,9 @@ public final class Config implements Comparable<Config> {
           gssFunctionMapProviderClassName,
           cssOutputFile,
           cssOutputFormat,
-          errorStream);
+          errorStream,
+          translationsDirectory,
+          language);
 
       return config;
     }

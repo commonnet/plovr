@@ -37,10 +37,13 @@ public class SoyFile extends LocalFileJsInput {
 
   private final SoyJsSrcOptions jsSrcOptions;
 
+  private final SoyFileOptions soyFileOptions;
+
   SoyFile(String name, File source, SoyFileOptions soyFileOptions) {
     super(name, source);
     this.injector = createInjector(soyFileOptions.pluginModuleNames);
     this.jsSrcOptions = get(soyFileOptions);
+    this.soyFileOptions = soyFileOptions;
   }
 
   private static SoyJsSrcOptions get(SoyFileOptions options) {
@@ -51,6 +54,7 @@ public class SoyFile extends LocalFileJsInput {
       value.setShouldProvideRequireSoyNamespaces(options.useClosureLibrary);
       value.setShouldDeclareTopLevelNamespaces(options.useClosureLibrary);
       value.setIsUsingIjData(options.isUsingInjectedData);
+      value.setShouldProvideBothSoyNamespacesAndJsFunctions(true);
 
       // TODO(mbolin): Make this configurable, though for now, prefer CONCAT
       // because the return type in STRINGBUILDER mode is {string|undefined}
@@ -69,8 +73,8 @@ public class SoyFile extends LocalFileJsInput {
     builder.add(getSource());
     builder.setCssHandlingScheme(CssHandlingScheme.BACKEND_SPECIFIC);
     SoyFileSet fileSet = builder.build();
-    final SoyMsgBundle msgBundle = null;
     try {
+      final SoyMsgBundle msgBundle = this.soyFileOptions.langBundle;
       String code = fileSet.compileToJsSrc(jsSrcOptions, msgBundle).get(0);
       logger.fine(code);
       return code;

@@ -843,6 +843,22 @@ public enum ConfigOption {
       return true;
     }
   }),
+
+  TRANSLATIONS("translations", new ConfigUpdater() {
+    @Override
+    public void apply(String file, Config.Builder builder) {
+      File inputFile = (file == null) ? null :
+          new File(maybeResolvePath(file, builder));
+      builder.setTranslationsDirectory(inputFile);
+    }
+  }),
+
+  LANGUAGE("language", new ConfigUpdater() {
+    @Override
+    public void apply(String language, Config.Builder builder) {
+      builder.setLanguage(language);
+    }
+  }),
   ;
 
   private static class ConfigUpdater {
