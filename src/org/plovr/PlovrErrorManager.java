@@ -27,11 +27,13 @@ public class PlovrErrorManager extends PrintStreamErrorManager {
   public void println(CheckLevel level, JSError error) {
     String sourceName = error.sourceName;
     boolean exclude = false;
-    for (Pattern warningExcludePath : this.warningExcludePaths) {
-      if (warningExcludePath.matcher(sourceName).matches()) {
-        exclude = true;
-        excludedWarningCount++;
-        break;
+    if (sourceName != null) {
+      for (Pattern warningExcludePath : this.warningExcludePaths) {
+        if (warningExcludePath.matcher(sourceName).matches()) {
+          exclude = true;
+          excludedWarningCount++;
+          break;
+        }
       }
     }
     if (!exclude) {
