@@ -15,7 +15,7 @@ import java.util.concurrent.*;
 
 public class TestCommand extends AbstractCommandRunner<TestCommandOptions> {
 
-  final private ScheduledExecutorService executorService = Executors.newScheduledThreadPool(8);
+  final private ExecutorService executorService = Executors.newFixedThreadPool(4);
 
   @Override
   TestCommandOptions createOptions() {
@@ -47,21 +47,16 @@ public class TestCommand extends AbstractCommandRunner<TestCommandOptions> {
         int timeout = options.getTimeout() * 1000;
 
         Set<String> relativeTestPaths = TestHandler.getRelativeTestFilePaths(config);
-        int offset = 0;
         for (final String relativeTestPath : relativeTestPaths) {
           URL url = new URL(String.format("http://localhost:%d/test/%s/%s",
               options.getPort(), config.getId(), relativeTestPath));
           final TestRunner testRunner = new TestRunner(url, config.getWebDriverFactories(), timeout);
-          testResults.add(executorService.schedule(new Callable<Boolean>() {
+          testResults.add(executorService.submit(new Callable<Boolean>() {
             @Override
             public Boolean call() throws Exception {
-              Thread.yield();
-              System.err.printf("START: %s - %s\n", relativeTestPath, Thread.currentThread().toString());
-              boolean result = testRunner.run();
-              System.err.printf("FINISH: %s - %s\n", relativeTestPath, Thread.currentThread().toString());
-              return result;
+              return testRunner.run();
             }
-          }, 1100 * ++offset, TimeUnit.MILLISECONDS));
+          }));
         }
 
         for (Future<Boolean> testResult : testResults) {
