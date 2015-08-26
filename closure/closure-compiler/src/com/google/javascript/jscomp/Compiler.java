@@ -16,22 +16,22 @@
 
 package com.google.javascript.jscomp;
 
-import static java.nio.charset.StandardCharsets.UTF_8;
-
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Function;
+import com.google.common.base.Joiner;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Supplier;
 import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
-import com.google.common.io.CharStreams;
 import com.google.debugging.sourcemap.proto.Mapping.OriginalMapping;
 import com.google.javascript.jscomp.CompilerOptions.DevMode;
 import com.google.javascript.jscomp.JSModuleGraph.MissingModuleException;
 import com.google.javascript.jscomp.ReferenceCollectingCallback.ReferenceCollection;
 import com.google.javascript.jscomp.TypeValidator.TypeMismatch;
+import com.google.javascript.jscomp.deps.ClosureSortedDependencies;
+import com.google.javascript.jscomp.deps.Es6SortedDependencies;
 import com.google.javascript.jscomp.deps.SortedDependencies;
 import com.google.javascript.jscomp.deps.SortedDependencies.CircularDependencyException;
 import com.google.javascript.jscomp.deps.SortedDependencies.MissingProvideException;
@@ -51,13 +51,14 @@ import com.google.javascript.rhino.Token;
 import com.google.javascript.rhino.TypeIRegistry;
 import com.google.javascript.rhino.jstype.JSTypeRegistry;
 
+import java.io.File;
 import java.io.IOException;
-import java.io.InputStreamReader;
 import java.io.PrintStream;
 import java.nio.file.FileSystems;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -65,13 +66,6 @@ import java.util.ResourceBundle;
 import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
-import java.util.concurrent.ThreadFactory;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.regex.Matcher;
@@ -92,7 +86,7 @@ import java.util.regex.Matcher;
  *
  */
 public class Compiler extends AbstractCompiler {
-  static final String SINGLETON_MODULE_NAME = "[singleton]";
+  static final String SINGLETON_MODULE_NAME = "$singleton$";
 
   static final DiagnosticType MODULE_DEPENDENCY_ERROR =
       DiagnosticType.error("JSC_MODULE_DEPENDENCY_ERROR",
@@ -148,7 +142,7 @@ public class Compiler extends AbstractCompiler {
   Node jsRoot;
   Node externAndJsRoot;
 
-  /** @see {@link #getLanguageMode()} */
+  /** @see #getLanguageMode() */
   private CompilerOptions.LanguageMode languageMode =
       CompilerOptions.LanguageMode.ECMASCRIPT3;
 
@@ -181,8 +175,6 @@ public class Compiler extends AbstractCompiler {
    * unique.
    */
   private int uniqueNameId = 0;
-
-  private int timeout = 0;
 
   /**
    * Whether to assume there are references to the RegExp Global object
@@ -230,38 +222,12 @@ public class Compiler extends AbstractCompiler {
       DiagnosticType.error("JSC_OPTIMIZE_LOOP_ERROR",
           "Exceeded max number of code motion iterations: {0}");
 
-  // We use many recursive algorithms that use O(d) memory in the depth
-  // of the tree.
-  private static final long COMPILER_STACK_SIZE = (1 << 21); // About 2MB
-
-  /**
-   * Under JRE 1.6, the JS Compiler overflows the stack when running on some
-   * large or complex JS code. When threads are available, we run all compile
-   * jobs on a separate thread with a larger stack.
-   *
-   * That way, we don't have to increase the stack size for *every* thread
-   * (which is what -Xss does).
-   */
-  private static final ExecutorService compilerExecutor =
-      Executors.newCachedThreadPool(new ThreadFactory() {
-    @Override public Thread newThread(Runnable r) {
-      return new Thread(null, r, "jscompiler", COMPILER_STACK_SIZE);
-    }
-  });
-
-  /**
-   * Use a dedicated compiler thread per Compiler instance.
-   */
-  private Thread compilerThread = null;
-
-  /** Whether to use threads. */
-  private boolean useThreads = true;
-
+  private final CompilerExecutor compilerExecutor = new CompilerExecutor();
 
   /**
    * Logger for the whole com.google.javascript.jscomp domain -
    * setting configuration for this logger affects all loggers
-   *  in other classes within the compiler.
+   * in other classes within the compiler.
    */
   private static final Logger logger =
       Logger.getLogger("com.google.javascript.jscomp");
@@ -274,6 +240,8 @@ public class Compiler extends AbstractCompiler {
   private String lastPassName;
 
   private Set<String> externProperties = null;
+
+  private static final Joiner pathJoiner = Joiner.on(File.separator);
 
   /**
    * Creates a Compiler that reports errors and warnings to its logger.
@@ -346,12 +314,10 @@ public class Compiler extends AbstractCompiler {
     reconcileOptionsWithGuards();
 
     // Initialize the warnings guard.
-    List<WarningsGuard> guards = ImmutableList.of(
-        new SuppressDocWarningsGuard(
-            getDiagnosticGroups().getRegisteredGroups()),
-        options.getWarningsGuard());
-
-    this.warningsGuard = new ComposeWarningsGuard(guards);
+    this.warningsGuard =
+        new ComposeWarningsGuard(
+            new SuppressDocWarningsGuard(getDiagnosticGroups().getRegisteredGroups()),
+            options.getWarningsGuard());
   }
 
   /**
@@ -501,7 +467,14 @@ public class Compiler extends AbstractCompiler {
    * an empty module.
    */
   static String createFillFileName(String moduleName) {
-    return "[" + moduleName + "]";
+    return moduleName + "$fillFile";
+  }
+
+  /**
+   * Creates an OS specific path string from parts
+   */
+  public static String joinPathParts(String... pathParts) {
+    return pathJoiner.join(pathParts);
   }
 
   /**
@@ -564,7 +537,8 @@ public class Compiler extends AbstractCompiler {
     return FileSystems.getDefault().getPath(base)
         .resolveSibling(relative)
         .normalize()
-        .toString();
+        .toString()
+        .replace(File.separator, "/");
   }
 
   /**
@@ -665,7 +639,7 @@ public class Compiler extends AbstractCompiler {
    * don't have threads.
    */
   public void disableThreads() {
-    useThreads = false;
+    compilerExecutor.disableThreads();
   }
 
   /**
@@ -673,70 +647,11 @@ public class Compiler extends AbstractCompiler {
    * @param timeout seconds to wait before timeout
    */
   public void setTimeout(int timeout) {
-    this.timeout = timeout;
+    compilerExecutor.setTimeout(timeout);
   }
 
-  @SuppressWarnings("unchecked")
-  <T> T runInCompilerThread(final Callable<T> callable) {
-    T result = null;
-    final Throwable[] exception = new Throwable[1];
-
-    Preconditions.checkState(
-        compilerThread == null || compilerThread == Thread.currentThread(),
-        "Please do not share the Compiler across threads");
-
-    // If the compiler thread is available, use it.
-    if (useThreads && compilerThread == null) {
-      try {
-        final boolean dumpTraceReport =
-            options != null && options.tracer.isOn();
-        Callable<T> bootCompilerThread = new Callable<T>() {
-          @Override
-          public T call() {
-            try {
-              compilerThread = Thread.currentThread();
-              if (dumpTraceReport) {
-                Tracer.initCurrentThreadTrace();
-              }
-              return callable.call();
-            } catch (Throwable e) {
-              exception[0] = e;
-            } finally {
-              compilerThread = null;
-              if (dumpTraceReport) {
-                Tracer.logCurrentThreadTrace();
-              }
-              Tracer.clearCurrentThreadTrace();
-            }
-            return null;
-          }
-        };
-
-        Future<T> future = compilerExecutor.submit(bootCompilerThread);
-        if (timeout > 0) {
-          result = future.get(timeout, TimeUnit.SECONDS);
-        } else {
-          result = future.get();
-        }
-      } catch (InterruptedException | TimeoutException | ExecutionException e) {
-        throw Throwables.propagate(e);
-      }
-    } else {
-      try {
-        result = callable.call();
-      } catch (Exception e) {
-        exception[0] = e;
-      } finally {
-        Tracer.clearCurrentThreadTrace();
-      }
-    }
-
-    // Pass on any exception caught by the runnable object.
-    if (exception[0] != null) {
-      Throwables.propagate(exception[0]);
-    }
-
-    return result;
+  <T> T runInCompilerThread(Callable<T> callable) {
+    return compilerExecutor.runInCompilerThread(callable, options != null && options.tracer.isOn());
   }
 
   private void compileInternal() {
@@ -754,7 +669,7 @@ public class Compiler extends AbstractCompiler {
       return;
     }
 
-    if (!options.skipAllPasses) {
+    if (!options.skipNonTranspilationPasses || options.lowerFromEs6()) {
       check();
       if (hasErrors()) {
         return;
@@ -811,10 +726,7 @@ public class Compiler extends AbstractCompiler {
     // the client wanted since they probably meant to use their
     // own PassConfig object.
     Preconditions.checkNotNull(passes);
-
-    if (this.passes != null) {
-      throw new IllegalStateException("this.passes has already been assigned");
-    }
+    Preconditions.checkState(this.passes == null, "setPassConfig was already called");
     this.passes = passes;
   }
 
@@ -1299,6 +1211,11 @@ public class Compiler extends AbstractCompiler {
   }
 
   @Override
+  Iterable<TypeMismatch> getImplicitInterfaceUses() {
+    return getTypeValidator().getImplicitStructuralInterfaceUses();
+  }
+
+  @Override
   GlobalTypeInfo getSymbolTable() {
     GlobalTypeInfo gti = symbolTable;
     symbolTable = null; // GC this after type inference
@@ -1511,17 +1428,14 @@ public class Compiler extends AbstractCompiler {
   }
 
   void processEs6Modules() {
+    ES6ModuleLoader loader = new ES6ModuleLoader(options.moduleRoots, inputs);
     for (CompilerInput input : inputs) {
       input.setCompiler(this);
       Node root = input.getAstRoot(this);
       if (root == null) {
         continue;
       }
-      new ProcessEs6Modules(
-          this,
-          new ES6ModuleLoader(this, options.commonJSModulePathPrefix),
-          true)
-      .processFile(root);
+      new ProcessEs6Modules(this, loader, true).processFile(root);
     }
   }
 
@@ -1537,6 +1451,7 @@ public class Compiler extends AbstractCompiler {
     // with multiple ways to express dependencies. Directly support JSModules
     // that are equivalent to a single file and which express their deps
     // directly in the source.
+    ES6ModuleLoader loader = new ES6ModuleLoader(options.moduleRoots, inputs);
     for (CompilerInput input : inputs) {
       input.setCompiler(this);
       Node root = input.getAstRoot(this);
@@ -1547,10 +1462,7 @@ public class Compiler extends AbstractCompiler {
         new TransformAMDToCJSModule(this).process(null, root);
       }
       if (options.processCommonJSModules) {
-        ProcessCommonJSModules cjs = new ProcessCommonJSModules(
-            this,
-            new ES6ModuleLoader(this, options.commonJSModulePathPrefix),
-            true);
+        ProcessCommonJSModules cjs = new ProcessCommonJSModules(this, loader, true);
         cjs.process(null, root);
 
         JSModule m = new JSModule(cjs.inputToModuleName(input));
@@ -1606,7 +1518,8 @@ public class Compiler extends AbstractCompiler {
     }
 
     SortedDependencies<JSModule> sorter =
-        new SortedDependencies<>(modules);
+        depOptions.isEs6ModuleOrder()
+            ? new Es6SortedDependencies<>(modules) : new ClosureSortedDependencies<>(modules);
     modules = sorter.getDependenciesOf(modules, true);
 
     // The compiler expects a module tree, so add a dependency of all modules on
@@ -1822,11 +1735,13 @@ public class Compiler extends AbstractCompiler {
           cb.append(delimiter)
             .append("\n");
         }
-        if (root.getJSDocInfo() != null &&
-            root.getJSDocInfo().getLicense() != null) {
-          cb.append("/*\n")
-            .append(root.getJSDocInfo().getLicense())
-            .append("*/\n");
+        if (root.getJSDocInfo() != null) {
+          String license = root.getJSDocInfo().getLicense();
+          if (license != null && cb.addLicense(license)) {
+            cb.append("/*\n")
+              .append(license)
+              .append("*/\n");
+          }
         }
 
         // If there is a valid source map, then indicate to it that the current
@@ -1889,6 +1804,7 @@ public class Compiler extends AbstractCompiler {
     private final StringBuilder sb = new StringBuilder();
     private int lineCount = 0;
     private int colCount = 0;
+    private final Set<String> uniqueLicenses = new HashSet<>();
 
     /** Removes all text, but leaves the line count unchanged. */
     void reset() {
@@ -1942,6 +1858,11 @@ public class Compiler extends AbstractCompiler {
     boolean endsWith(String suffix) {
       return (sb.length() > suffix.length())
           && suffix.equals(sb.substring(sb.length() - suffix.length()));
+    }
+
+    /** Adds a license and returns whether it is unique (has yet to be encountered). */
+    boolean addLicense(String license) {
+      return uniqueLicenses.add(license);
     }
   }
 
@@ -2112,6 +2033,7 @@ public class Compiler extends AbstractCompiler {
       case ECMASCRIPT5_STRICT:
       case ECMASCRIPT6:
       case ECMASCRIPT6_STRICT:
+      case ECMASCRIPT6_TYPED:
         return true;
       case ECMASCRIPT3:
         return false;
@@ -2120,12 +2042,6 @@ public class Compiler extends AbstractCompiler {
             "unexpected language mode: " + options.getLanguageIn());
     }
   }
-
-  @Override
-  public boolean acceptConstKeyword() {
-    return options.acceptConstKeyword;
-  }
-
   @Override
   Config getParserConfig(ConfigContext context) {
     if (parserConfig == null) {
@@ -2172,7 +2088,6 @@ public class Compiler extends AbstractCompiler {
         isIdeMode(),
         options.isParseJsDocDocumentation(),
         mode,
-        acceptConstKeyword(),
         options.extraAnnotationNames);
   }
 
@@ -2617,21 +2532,12 @@ public class Compiler extends AbstractCompiler {
   /** Load a library as a resource */
   @VisibleForTesting
   Node loadLibraryCode(String resourceName, boolean normalizeAndUniquifyNames) {
-    String originalCode;
-    try {
-      originalCode = CharStreams.toString(new InputStreamReader(
-          Compiler.class.getResourceAsStream(
-              String.format("js/%s.js", resourceName)),
-          UTF_8));
-    } catch (IOException e) {
-      throw new RuntimeException(e);
-    }
+    String originalCode = ResourceLoader.loadTextResource(
+        Compiler.class, "js/" + resourceName + ".js");
 
     Node ast = parseSyntheticCode(originalCode);
     if (normalizeAndUniquifyNames) {
-      Normalize.normalizeSyntheticCode(
-          this, ast,
-          String.format("jscomp_%s_", resourceName));
+      Normalize.normalizeSyntheticCode(this, ast, "jscomp_" + resourceName + "_");
     }
     return ast;
   }

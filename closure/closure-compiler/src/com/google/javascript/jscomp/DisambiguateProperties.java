@@ -313,11 +313,15 @@ class DisambiguateProperties<T> implements CompilerPass {
       addInvalidatingType(mis.typeA, mis.src);
       addInvalidatingType(mis.typeB, mis.src);
     }
+    for (TypeMismatch mis : compiler.getImplicitInterfaceUses()) {
+      addInvalidatingType(mis.typeA, mis.src);
+      addInvalidatingType(mis.typeB, mis.src);
+    }
     // Gather names of properties in externs; these properties can't be renamed.
-    NodeTraversal.traverse(compiler, externs, new FindExternProperties());
+    NodeTraversal.traverseEs6(compiler, externs, new FindExternProperties());
     // Look at each unquoted property access and decide if that property will
     // be renamed.
-    NodeTraversal.traverse(compiler, root, new FindRenameableProperties());
+    NodeTraversal.traverseEs6(compiler, root, new FindRenameableProperties());
     // Do the actual renaming.
     renameProperties();
   }
@@ -337,7 +341,7 @@ class DisambiguateProperties<T> implements CompilerPass {
   private void addInvalidatingType(JSType type, JSError error) {
     type = type.restrictByNotNullOrUndefined();
     if (type.isUnionType()) {
-      for (JSType alt : type.toMaybeUnionType().getAlternates()) {
+      for (JSType alt : type.toMaybeUnionType().getAlternatesWithoutStructuralTyping()) {
         addInvalidatingType(alt, error);
       }
     } else if (type.isEnumElementType()) {
@@ -456,7 +460,7 @@ class DisambiguateProperties<T> implements CompilerPass {
                     "consider using @this";
             } else {
               String qName = n.getFirstChild().getQualifiedName();
-              suggestion = "Consider casting " + qName + " if you know it's type.";
+              suggestion = "Consider casting " + qName + " if you know its type.";
             }
           } else {
             List<String> errors = new ArrayList<>();
@@ -824,7 +828,7 @@ class DisambiguateProperties<T> implements CompilerPass {
 
     @Override public Iterable<JSType> getTypeAlternatives(JSType type) {
       if (type.isUnionType()) {
-        return type.toMaybeUnionType().getAlternates();
+        return type.toMaybeUnionType().getAlternatesWithoutStructuralTyping();
       } else {
         ObjectType objType = type.toObjectType();
         if (objType != null &&

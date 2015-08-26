@@ -39,7 +39,7 @@ import java.util.Set;
  * Compiler options
  * @author nicksantos@google.com (Nick Santos)
  */
-public class CompilerOptions implements Serializable, Cloneable {
+public class CompilerOptions implements Serializable {
 
   // Unused. For people using reflection to circumvent access control.
   @SuppressWarnings("unused")
@@ -77,40 +77,23 @@ public class CompilerOptions implements Serializable, Cloneable {
   private LanguageMode languageOut;
 
   /**
-   * Allows ES6 compilation output.
+   * The builtin set of externs to be used
    */
-  private boolean allowEs6Out;
+  private Environment environment;
 
   /**
-   * Allow ES6 as the output language.
-   * WARNING: Enabling this option may cause the compiler to crash
+   * If true, don't transpile ES6 to ES3.
+   *  WARNING: Enabling this option will likely cause the compiler to crash
    *     or produce incorrect output.
    */
-  public void setAllowEs6Out(boolean value) {
-    allowEs6Out = value;
-  }
-
-  public boolean getAllowEs6Out() {
-    return allowEs6Out;
-  }
+  boolean skipTranspilationAndCrash = false;
 
   /**
-   * If true, transpile ES6 to ES3 only. All others passes will be skipped.
+   * Allow disabling ES6 to ES3 transpilation.
    */
-  boolean transpileOnly;
-
-  /**
-   * Only do transpilation, don't inject es6_runtime.js or
-   * do any optimizations (this is useful for per-file transpilation).
-   */
-  public void setTranspileOnly(boolean value) {
-    transpileOnly = value;
+  public void setSkipTranspilationAndCrash(boolean value) {
+    skipTranspilationAndCrash = value;
   }
-
-  /**
-   * Whether the compiler accepts the `const' keyword.
-   */
-  boolean acceptConstKeyword;
 
   /**
    * Whether the compiler accepts type syntax ({@code var foo: string;}).
@@ -165,8 +148,9 @@ public class CompilerOptions implements Serializable, Cloneable {
 
   /**
    * Configures the compiler to skip as many passes as possible.
+   * If transpilation is requested, it will be run, but all others passes will be skipped.
    */
-  boolean skipAllPasses;
+  boolean skipNonTranspilationPasses;
 
   /**
    * Configures the compiler to run expensive sanity checks after
@@ -197,12 +181,12 @@ public class CompilerOptions implements Serializable, Cloneable {
   /** Checks that all symbols are defined */
   public boolean checkSymbols;
 
-  public CheckLevel aggressiveVarCheck;
-
-  /** Checks for suspicious variable definitions and undefined variables */
-  public void setAggressiveVarCheck(CheckLevel level) {
-    this.aggressiveVarCheck = level;
-  }
+  /**
+   * Deprecated. The checks that used to be controlled by this flag are now on by default,
+   * and this setter is a no-op. You can safely remove this call from your code.
+   */
+  @Deprecated
+  public void setAggressiveVarCheck(CheckLevel level) {}
 
   /** Checks for suspicious statements that have no effect */
   public boolean checkSuspiciousCode;
@@ -428,35 +412,8 @@ public class CompilerOptions implements Serializable, Cloneable {
   /** Removes unused variables in local scope. */
   public boolean removeUnusedLocalVars;
 
-  /** Adds variable aliases for externals to reduce code size */
-  public boolean aliasExternals;
-
-  String aliasableGlobals;
-
-  /**
-   * A comma separated white-list of global names. When {@link #aliasExternals}
-   * is enable, if set to a non-empty string, only externals with these names
-   * will be considered for aliasing.
-   */
-  public void setAliasableGlobals(String names) {
-    aliasableGlobals = names;
-  }
-
-  String unaliasableGlobals;
-
-  /**
-   * A comma separated white-list of global names. When {@link #aliasExternals}
-   * is enable, these global names will not be aliased.
-   */
-  public void setUnaliasableGlobals(String names) {
-    unaliasableGlobals = names;
-  }
-
   /** Collapses multiple variable declarations into one */
   public boolean collapseVariableDeclarations;
-
-  /** Group multiple variable declarations into one */
-  boolean groupVariableDeclarations;
 
   /**
    * Collapses anonymous function declarations into named function
@@ -745,7 +702,7 @@ public class CompilerOptions implements Serializable, Cloneable {
   public boolean moveFunctionDeclarations;
 
   /** Instrumentation template to use with #recordFunctionInformation */
-  public String instrumentationTemplate;
+  public Instrumentation instrumentationTemplate;
 
   String appNameStr;
 
@@ -807,8 +764,7 @@ public class CompilerOptions implements Serializable, Cloneable {
   boolean processCommonJSModules = false;
 
   /** CommonJS module prefix. */
-  String commonJSModulePathPrefix =
-      ProcessCommonJSModules.DEFAULT_FILENAME_PREFIX;
+  List<String> moduleRoots = ImmutableList.of(ES6ModuleLoader.DEFAULT_FILENAME_PREFIX);
 
 
   //--------------------------------
@@ -986,20 +942,17 @@ public class CompilerOptions implements Serializable, Cloneable {
     languageIn = LanguageMode.ECMASCRIPT3;
     languageOut = LanguageMode.NO_TRANSPILE;
 
-    // Experimental
-    allowEs6Out = false;
+    // Which environment to use
+    environment = Environment.BROWSER;
 
     // Language variation
-    acceptConstKeyword = false;
     acceptTypeSyntax = false;
 
     // Checks
-    transpileOnly = false;
-    skipAllPasses = false;
+    skipNonTranspilationPasses = false;
     devMode = DevMode.OFF;
     checkDeterminism = false;
     checkSymbols = false;
-    aggressiveVarCheck = CheckLevel.OFF;
     checkSuspiciousCode = false;
     checkTypes = false;
     reportMissingOverride = CheckLevel.OFF;
@@ -1043,9 +996,7 @@ public class CompilerOptions implements Serializable, Cloneable {
     removeUnusedConstructorProperties = false;
     removeUnusedVars = false;
     removeUnusedLocalVars = false;
-    aliasExternals = false;
     collapseVariableDeclarations = false;
-    groupVariableDeclarations = false;
     collapseAnonymousFunctions = false;
     aliasableStrings = Collections.emptySet();
     aliasStringsBlacklist = "";
@@ -1272,7 +1223,7 @@ public class CompilerOptions implements Serializable, Cloneable {
    * Skip all possible passes, to make the compiler as fast as possible.
    */
   public void skipAllCompilerPasses() {
-    skipAllPasses = true;
+    skipNonTranspilationPasses = true;
   }
 
   /**
@@ -1511,13 +1462,6 @@ public class CompilerOptions implements Serializable, Cloneable {
   }
 
   /**
-   * If true, accept `const' keyword.
-   */
-  public void setAcceptConstKeyword(boolean value) {
-    this.acceptConstKeyword = value;
-  }
-
-  /**
    * Enable run-time type checking, which adds JS type assertions for debugging.
    *
    * @param logFunction A JS function to be used for logging run-time type
@@ -1567,6 +1511,10 @@ public class CompilerOptions implements Serializable, Cloneable {
   public void setDependencyOptions(DependencyOptions options) {
     Preconditions.checkNotNull(options);
     this.dependencyOptions = options;
+  }
+
+  public DependencyOptions getDependencyOptions() {
+    return dependencyOptions;
   }
 
   /**
@@ -1664,7 +1612,9 @@ public class CompilerOptions implements Serializable, Cloneable {
    */
   public void setLanguageIn(LanguageMode languageIn) {
     Preconditions.checkState(languageIn != LanguageMode.NO_TRANSPILE);
+    Preconditions.checkNotNull(dependencyOptions);
     this.languageIn = languageIn;
+    dependencyOptions.setEs6ModuleOrder(languageIn.isEs6OrHigher());
   }
 
   public LanguageMode getLanguageIn() {
@@ -1687,6 +1637,17 @@ public class CompilerOptions implements Serializable, Cloneable {
   }
 
   /**
+   * Set which set of builtin externs to use.
+   */
+  public void setEnvironment(Environment environment) {
+    this.environment = environment;
+  }
+
+  public Environment getEnvironment() {
+    return environment;
+  }
+
+  /**
    * @return whether we are currently transpiling from ES6 to a lower version.
    */
   boolean lowerFromEs6() {
@@ -1702,13 +1663,6 @@ public class CompilerOptions implements Serializable, Cloneable {
     return languageOut != LanguageMode.NO_TRANSPILE
         && !languageIn.isEs6OrHigher()
         && languageOut == LanguageMode.ECMASCRIPT6_TYPED;
-  }
-
-  @Override
-  public Object clone() throws CloneNotSupportedException {
-    CompilerOptions clone = (CompilerOptions) super.clone();
-    // TODO(bolinfest): Add relevant custom cloning.
-    return clone;
   }
 
   public void setAliasTransformationHandler(
@@ -1823,8 +1777,12 @@ public class CompilerOptions implements Serializable, Cloneable {
     return this.ideMode || this.parseJsDocDocumentation;
   }
 
-  public void setSkipAllPasses(boolean skipAllPasses) {
-    this.skipAllPasses = skipAllPasses;
+  /**
+   * Skip all passes (other than transpilation, if requested). Don't inject es6_runtime.js
+   * or do any checks/optimizations (this is useful for per-file transpilation).
+   */
+  public void setSkipNonTranspilationPasses(boolean skipNonTranspilationPasses) {
+    this.skipNonTranspilationPasses = skipNonTranspilationPasses;
   }
 
   public void setDevMode(DevMode devMode) {
@@ -1939,6 +1897,8 @@ public class CompilerOptions implements Serializable, Cloneable {
             : ExtractPrototypeMemberDeclarationsMode.OFF;
   }
 
+  // USE_IIFE is currently unused. Consider removing support for it and
+  // deleting this setter.
   public void setExtractPrototypeMemberDeclarations(ExtractPrototypeMemberDeclarationsMode mode) {
     this.extractPrototypeMemberDeclarations = mode;
   }
@@ -1959,16 +1919,8 @@ public class CompilerOptions implements Serializable, Cloneable {
     this.removeUnusedLocalVars = removeUnusedLocalVars;
   }
 
-  public void setAliasExternals(boolean aliasExternals) {
-    this.aliasExternals = aliasExternals;
-  }
-
   public void setCollapseVariableDeclarations(boolean enabled) {
     this.collapseVariableDeclarations = enabled;
-  }
-
-  public void setGroupVariableDeclarations(boolean enabled) {
-    this.groupVariableDeclarations = enabled;
   }
 
   public void setCollapseAnonymousFunctions(boolean enabled) {
@@ -2190,7 +2142,7 @@ public class CompilerOptions implements Serializable, Cloneable {
     this.moveFunctionDeclarations = moveFunctionDeclarations;
   }
 
-  public void setInstrumentationTemplate(String instrumentationTemplate) {
+  public void setInstrumentationTemplate(Instrumentation instrumentationTemplate) {
     this.instrumentationTemplate = instrumentationTemplate;
   }
 
@@ -2313,10 +2265,17 @@ public class CompilerOptions implements Serializable, Cloneable {
   }
 
   /**
-   * Sets a path prefix for CommonJS modules.
+   * Sets a path prefix for CommonJS modules (maps to {@link #setModuleRoots(List)}).
    */
   public void setCommonJSModulePathPrefix(String commonJSModulePathPrefix) {
-    this.commonJSModulePathPrefix = commonJSModulePathPrefix;
+    setModuleRoots(ImmutableList.of(commonJSModulePathPrefix));
+  }
+
+  /**
+   * Sets the module roots.
+   */
+  public void setModuleRoots(List<String> moduleRoots) {
+    this.moduleRoots = moduleRoots;
   }
 
   /**
@@ -2348,7 +2307,12 @@ public class CompilerOptions implements Serializable, Cloneable {
   //////////////////////////////////////////////////////////////////////////////
   // Enums
 
-  /** When to do the extra sanity checks */
+  /**
+   * A language mode applies to the whole compilation job.
+   * As a result, the compiler does not support mixed strict and non-strict in
+   * the same compilation job. Therefore, the 'use strict' directive is ignored
+   * when the language mode is not strict.
+   */
   public static enum LanguageMode {
     /**
      * 90's JavaScript
@@ -2418,6 +2382,9 @@ public class CompilerOptions implements Serializable, Cloneable {
     }
 
     public static LanguageMode fromString(String value) {
+      if (value == null) {
+        return null;
+      }
       switch (value) {
         case "ECMASCRIPT6_STRICT":
         case "ES6_STRICT":
@@ -2579,5 +2546,21 @@ public class CompilerOptions implements Serializable, Cloneable {
       public void addAlias(String alias, String definition) {
       }
     }
+  }
+
+  /**
+   * An environment specifies the built-in externs that are loaded for a given
+   * compilation.
+   */
+  public static enum Environment {
+    /**
+     * Hand crafted externs that have traditionally been the default externs.
+     */
+    BROWSER,
+
+    /**
+     * Only language externs are loaded.
+     */
+    CUSTOM
   }
 }

@@ -35,7 +35,6 @@ public final class NormalizeTest extends CompilerTestCase {
 
   public NormalizeTest() {
     super(EXTERNS);
-    super.enableLineNumberCheck(true);
     compareJsDoc = false;
   }
 
@@ -461,13 +460,11 @@ public final class NormalizeTest extends CompilerTestCase {
   }
 
   public void testExposeSimple() {
-    setExpectParseWarningsThisTest();
     test("var x = {}; /** @expose */ x.y = 3; x.y = 5;",
          "var x = {}; x['y'] = 3; x['y'] = 5;");
   }
 
   public void testExposeComplex() {
-    setExpectParseWarningsThisTest();
     test(
         "var x = {/** @expose */ a: 1, b: 2};"
         + "x.a = 3; /** @expose */ x.b = 5;",
@@ -477,7 +474,7 @@ public final class NormalizeTest extends CompilerTestCase {
 
   private Set<Node> findNodesWithProperty(Node root, final int prop) {
     final Set<Node> set = new HashSet<>();
-    NodeTraversal.traverse(
+    NodeTraversal.traverseEs6(
         getLastCompiler(), root, new AbstractPostOrderCallback() {
         @Override
         public void visit(NodeTraversal t, Node node, Node parent) {
@@ -537,7 +534,7 @@ public final class NormalizeTest extends CompilerTestCase {
       return new CompilerPass() {
         @Override
         public void process(Node externs, Node root) {
-          new CollapseProperties(compiler).process(externs, root);
+          new CollapseProperties(compiler, true).process(externs, root);
         }
       };
     }

@@ -974,15 +974,15 @@ class RemoveUnusedVars
           if (current.isGetElem()) {
             replacement = IR.comma(
                 current.getLastChild().detachFromParent(), replacement);
-            replacement.copyInformationFrom(current);
+            replacement.useSourceInfoIfMissingFrom(current);
           }
         }
 
         parent.replaceChild(assignNode, replacement);
       } else {
-        Node gramps = parent.getParent();
+        Node grandparent = parent.getParent();
         if (parent.isExprResult()) {
-          gramps.removeChild(parent);
+          grandparent.removeChild(parent);
         } else {
           parent.replaceChild(assignNode,
               assignNode.getLastChild().detachFromParent());

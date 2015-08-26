@@ -28,7 +28,7 @@ import java.util.Iterator;
  * CommonJS module. See {@link ProcessCommonJSModules} for follow up processing
  * step.
  */
-class TransformAMDToCJSModule implements CompilerPass {
+public final class TransformAMDToCJSModule implements CompilerPass {
 
   @VisibleForTesting
   static final DiagnosticType UNSUPPORTED_DEFINE_SIGNATURE_ERROR =
@@ -52,7 +52,7 @@ class TransformAMDToCJSModule implements CompilerPass {
   private final AbstractCompiler compiler;
   private int renameIndex = 0;
 
-  TransformAMDToCJSModule(AbstractCompiler compiler) {
+  public TransformAMDToCJSModule(AbstractCompiler compiler) {
     this.compiler = compiler;
   }
 
@@ -145,7 +145,7 @@ class TransformAMDToCJSModule implements CompilerPass {
               IR.assign(
                   NodeUtil.newQName(compiler, "module.exports"),
                   onlyExport))
-          .copyInformationFromForTree(onlyExport));
+          .useSourceInfoIfMissingFromForTree(onlyExport));
       compiler.reportCodeChange();
     }
 
@@ -202,10 +202,10 @@ class TransformAMDToCJSModule implements CompilerPass {
         call.putBooleanProp(Node.FREE_CALL, true);
         if (aliasName != null) {
           requireNode = IR.var(IR.name(aliasName), call)
-              .copyInformationFromForTree(aliasNode);
+              .useSourceInfoIfMissingFromForTree(aliasNode);
         } else {
           requireNode = IR.exprResult(call).
-              copyInformationFromForTree(modNode);
+              useSourceInfoIfMissingFromForTree(modNode);
         }
       } else {
         // ignore exports, require and module (because they are implicit
@@ -214,7 +214,7 @@ class TransformAMDToCJSModule implements CompilerPass {
           return;
         }
         requireNode = IR.var(IR.name(aliasName), IR.nullNode())
-            .copyInformationFromForTree(aliasNode);
+            .useSourceInfoIfMissingFromForTree(aliasNode);
       }
 
       script.addChildBefore(requireNode,

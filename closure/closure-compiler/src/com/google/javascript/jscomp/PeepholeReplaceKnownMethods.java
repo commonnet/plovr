@@ -31,8 +31,6 @@ import java.util.Locale;
  */
 class PeepholeReplaceKnownMethods extends AbstractPeepholeOptimization{
 
-  // The LOCALE independent "locale"
-  private static final Locale ROOT_LOCALE = new Locale("");
   private final boolean late;
 
   /**
@@ -163,7 +161,7 @@ class PeepholeReplaceKnownMethods extends AbstractPeepholeOptimization{
    */
   private Node tryFoldStringToLowerCase(Node subtree, Node stringNode) {
     // From Rhino, NativeString.java. See ECMA 15.5.4.11
-    String lowered = stringNode.getString().toLowerCase(ROOT_LOCALE);
+    String lowered = stringNode.getString().toLowerCase(Locale.ROOT);
     Node replacement = IR.string(lowered);
     subtree.getParent().replaceChild(subtree, replacement);
     reportCodeChange();
@@ -175,7 +173,7 @@ class PeepholeReplaceKnownMethods extends AbstractPeepholeOptimization{
    */
   private Node tryFoldStringToUpperCase(Node subtree, Node stringNode) {
     // From Rhino, NativeString.java. See ECMA 15.5.4.12
-    String upped = stringNode.getString().toUpperCase(ROOT_LOCALE);
+    String upped = stringNode.getString().toUpperCase(Locale.ROOT);
     Node replacement = IR.string(upped);
     subtree.getParent().replaceChild(subtree, replacement);
     reportCodeChange();
@@ -437,7 +435,7 @@ class PeepholeReplaceKnownMethods extends AbstractPeepholeOptimization{
           // + 2 for the quotes.
           foldedSize += sb.length() + 2;
           arrayFoldedChildren.add(
-              IR.string(sb.toString()).copyInformationFrom(prev));
+              IR.string(sb.toString()).useSourceInfoIfMissingFrom(prev));
           sb = null;
         }
         foldedSize += InlineCostEstimator.getCost(elem);
@@ -452,7 +450,7 @@ class PeepholeReplaceKnownMethods extends AbstractPeepholeOptimization{
       // + 2 for the quotes.
       foldedSize += sb.length() + 2;
       arrayFoldedChildren.add(
-          IR.string(sb.toString()).copyInformationFrom(prev));
+          IR.string(sb.toString()).useSourceInfoIfMissingFrom(prev));
     }
     // one for each comma.
     foldedSize += arrayFoldedChildren.size() - 1;

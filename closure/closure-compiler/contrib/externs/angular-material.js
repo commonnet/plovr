@@ -22,7 +22,7 @@
 
 
 /**
- * @const {Object}
+ * @const
  */
 var md = {};
 
@@ -93,7 +93,7 @@ md.$dialog = function() {};
  *   locals: (Object|undefined),
  *   resolve: (Object|undefined),
  *   controllerAs: (string|undefined),
- *   parent: (Element|undefined)
+ *   parent: (angular.JQLite|Element|undefined)
  * }}
  */
 md.$dialog.options;
@@ -184,6 +184,13 @@ md.$toast.prototype.show = function(options) {};
 
 
 /**
+ * @param {string} text
+ * @return {angular.$q.Promise}
+ */
+md.$toast.prototype.showSimple = function(text) {};
+
+
+/**
  * @type {function(*=)}
  */
 md.$toast.prototype.hide = function() {};
@@ -219,6 +226,7 @@ md.$toast.prototype.simple = function() {};
 
 /**
  * @typedef {{
+ *   isLockedOpen: function():boolean,
  *   isOpen: function():boolean,
  *   toggle: function(),
  *   open: function(),
@@ -297,6 +305,12 @@ md.$mdThemingProvider.Theme.prototype.backgroundPalette =
  */
 md.$mdThemingProvider.Theme.prototype.warnPalette = function(warnPalette) {};
 
+/**
+ * @param {boolean=} isDark
+ * @return {md.$mdThemingProvider.Theme}
+ */
+md.$mdThemingProvider.Theme.prototype.dark = function(isDark) {};
+
 /*****************************************************************************/
 
 
@@ -343,3 +357,9 @@ md.$mdIconProvider.prototype.defaultIconSet = function(url, iconSize) {};
  * @return {md.$mdIconProvider}
  */
 md.$mdIconProvider.prototype.defaultIconSize = function(iconSize) {};
+
+/**
+ * @param {string} name
+ * @return {md.$mdIconProvider}
+ */
+md.$mdIconProvider.prototype.defaultFontSet = function(name) {};

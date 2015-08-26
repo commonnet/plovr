@@ -16,14 +16,14 @@
 
 package com.google.javascript.jscomp;
 
-
+import com.google.javascript.jscomp.CompilerOptions.LanguageMode;
 
 /**
  * Test that warnings are generated in appropriate cases and appropriate
  * cases only by VariableReferenceCheck
  *
  */
-public final class VariableReferenceCheckTest extends CompilerTestCase {
+public final class VariableReferenceCheckTest extends Es6CompilerTestCase {
 
   private static final String VARIABLE_RUN =
       "var a = 1; var b = 2; var c = a + b, d = c;";
@@ -43,7 +43,7 @@ public final class VariableReferenceCheckTest extends CompilerTestCase {
   @Override
   public CompilerPass getProcessor(Compiler compiler) {
     // Treats bad reads as errors, and reports bad write warnings.
-    return new VariableReferenceCheck(compiler, CheckLevel.WARNING);
+    return new VariableReferenceCheck(compiler);
   }
 
   @Override
@@ -57,6 +57,7 @@ public final class VariableReferenceCheckTest extends CompilerTestCase {
     assertNoWarning("function foo() { bar(); } function bar() { foo(); } ");
     assertNoWarning("function f(d) { d = 3; }");
     assertNoWarning(VARIABLE_RUN);
+    assertNoWarning("if (a) { var x; }");
     assertNoWarning("function f() { " + VARIABLE_RUN + "}");
   }
 
@@ -75,12 +76,14 @@ public final class VariableReferenceCheckTest extends CompilerTestCase {
 
   public void testCorrectCatch() {
     assertNoWarning("function f() { try { var x = 2; } catch (x) {} }");
+    assertNoWarning("function f(e) { e = 3; try {} catch (e) {} }");
   }
 
   public void testRedeclare() {
     // Only test local scope since global scope is covered elsewhere
     assertRedeclare("function f() { var a = 2; var a = 3; }");
     assertRedeclare("function f(a) { var a = 2; }");
+    assertRedeclare("function f(a) { if (!a) var a = 6; }");
   }
 
   public void testEarlyReference() {
@@ -168,13 +171,22 @@ public final class VariableReferenceCheckTest extends CompilerTestCase {
     assertNoWarning("function g() { if (false) { function f() { f(); g(); }}}");
   }
 
+  public void testDestructuringInFor() {
+    testSameEs6("for (let [key, val] of X){}");
+    testSameEs6("for (let [key, [nestKey, nestVal], val] of X){}");
+
+    testSameEs6("var {x: a, y: b} = {x: 1, y: 2}; a++; b++;");
+    testWarningEs6("a++; var {x: a} = {x: 1};",
+        VariableReferenceCheck.EARLY_REFERENCE);
+  }
+
   public void testNoWarnInExterns1() {
     // Verify duplicate suppressions are properly recognized.
     String externs =
        "var google;" +
        "/** @suppress {duplicate} */ var google";
     String code = "";
-    test(externs, code, code, null, null);
+    testSame(externs, code, null);
   }
 
   public void testNoWarnInExterns2() {
@@ -183,30 +195,31 @@ public final class VariableReferenceCheckTest extends CompilerTestCase {
        "window;" +
        "var window;";
     String code = "";
-    test(externs, code, code, null, null);
+    testSame(externs, code, null);
   }
 
   /**
    * Expects the JS to generate one bad-read error.
    */
   private void assertRedeclare(String js) {
-    testSame(js, VariableReferenceCheck.REDECLARED_VARIABLE);
+    testWarning(js, VariableReferenceCheck.REDECLARED_VARIABLE);
   }
 
   /**
    * Expects the JS to generate one bad-write warning.
    */
   private void assertUndeclared(String js) {
-    testSame(js, VariableReferenceCheck.EARLY_REFERENCE);
+    testWarning(js, VariableReferenceCheck.EARLY_REFERENCE);
   }
 
   /**
    * Expects the JS to generate one bad-write warning.
    */
   private void assertAmbiguous(String js) {
-    testSame(js, VariableReferenceCheck.AMBIGUOUS_FUNCTION_DECL);
+    testWarning(js, VariableReferenceCheck.AMBIGUOUS_FUNCTION_DECL,
+        LanguageMode.ECMASCRIPT5);
+    testSameEs6(js); // In ES6, these are block scoped functions, so no ambiguity.
   }
-
 
   /**
    * Expects the JS to generate no errors or warnings.

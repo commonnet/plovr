@@ -44,12 +44,12 @@ public final class CheckConformance extends AbstractPostOrderCallback
   static final DiagnosticType CONFORMANCE_VIOLATION =
       DiagnosticType.warning(
           "JSC_CONFORMANCE_VIOLATION",
-          "Violation: {0}");
+          "Violation: {0}{1}{2}");
 
   static final DiagnosticType CONFORMANCE_POSSIBLE_VIOLATION =
       DiagnosticType.warning(
           "JSC_CONFORMANCE_POSSIBLE_VIOLATION",
-          "Possible violation: {0}");
+          "Possible violation: {0}{1}{2}");
 
   static final DiagnosticType INVALID_REQUIREMENT_SPEC =
       DiagnosticType.error(
@@ -78,7 +78,7 @@ public final class CheckConformance extends AbstractPostOrderCallback
   @Override
   public void process(Node externs, Node root) {
     if (!rules.isEmpty()) {
-      NodeTraversal.traverse(compiler, root, this);
+      NodeTraversal.traverseEs6(compiler, root, this);
     }
   }
 

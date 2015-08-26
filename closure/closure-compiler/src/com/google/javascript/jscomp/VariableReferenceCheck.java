@@ -73,16 +73,13 @@ class VariableReferenceCheck implements HotSwapCompilerPass {
       "Block-scoped declaration not directly within block: {0}");
 
   private final AbstractCompiler compiler;
-  private final CheckLevel checkLevel;
 
   // NOTE(nicksantos): It's a lot faster to use a shared Set that
   // we clear after each method call, because the Set never gets too big.
   private final Set<BasicBlock> blocksWithDeclarations = new HashSet<>();
 
-  public VariableReferenceCheck(AbstractCompiler compiler,
-      CheckLevel checkLevel) {
+  public VariableReferenceCheck(AbstractCompiler compiler) {
     this.compiler = compiler;
-    this.checkLevel = checkLevel;
   }
 
   @Override
@@ -118,10 +115,10 @@ class VariableReferenceCheck implements HotSwapCompilerPass {
         ReferenceCollection referenceCollection = referenceMap.getReferences(v);
         // TODO(moz): Figure out why this could be null
         if (referenceCollection != null) {
-          if (scope.getRootNode().isFunction() && v.getParentNode().isDefaultValue()
-              && v.getParentNode().getFirstChild() == v.getNode()) {
+          if (scope.getRootNode().isFunction() && v.isDefaultParam()) {
             checkDefaultParam(v, scope);
-          } else if (scope.isFunctionBlockScope()) {
+          }
+          if (scope.getRootNode().isFunction()) {
             checkShadowParam(v, scope, referenceCollection.references);
           }
           checkVar(v, referenceCollection.references);
@@ -150,33 +147,31 @@ class VariableReferenceCheck implements HotSwapCompilerPass {
 
     private void checkDefaultParam(Var v, Scope scope) {
       ShallowReferenceCollector check = new ShallowReferenceCollector();
-      NodeTraversal.traverse(compiler, v.getParentNode().getChildAtIndex(1), check);
+      NodeTraversal.traverseEs6(compiler, v.getParentNode().getChildAtIndex(1), check);
       for (Node ref : check.currParamReferences) {
         String refName = ref.getString();
         if (!scope.isDeclared(refName, true)) {
-          compiler.report(JSError.make(ref, checkLevel, EARLY_REFERENCE_ERROR, v.name));
+          compiler.report(JSError.make(ref, EARLY_REFERENCE_ERROR, v.name));
         }
       }
     }
 
-    private void checkShadowParam(Var v, Scope scope, List<Reference> references) {
-      Scope functionScope = scope.getParent();
+    private void checkShadowParam(Var v, Scope functionScope, List<Reference> references) {
       Var maybeParam = functionScope.getVar(v.getName());
       if (maybeParam != null && maybeParam.isParam()
           && maybeParam.getScope() == functionScope) {
         for (Reference r : references) {
-          if (!r.isDeclaration() || r.getScope() != scope) {
-            continue;
+          if (r.isDeclaration() && !r.getNode().equals(v.getNameNode())) {
+            if (!compiler.getLanguageMode().isEs6OrHigher() && r.getParent().isCatch()) {
+              continue;
+            }
+            compiler.report(
+                JSError.make(
+                    r.getNode(),
+                    (r.isVarDeclaration() || r.isHoistedFunction())
+                    ? REDECLARED_VARIABLE
+                    : PARAMETER_SHADOWED_ERROR, v.name));
           }
-          compiler.report(
-              JSError.make(
-                  r.getNode(),
-                  checkLevel,
-                  (r.isVarDeclaration() || r.isHoistedFunction())
-                      && !(maybeParam.getNode().getParent().isDefaultValue()
-                          || maybeParam.getNode().isRest())
-                  ? REDECLARED_VARIABLE
-                  : PARAMETER_SHADOWED_ERROR, v.name));
         }
       }
     }
@@ -235,16 +230,17 @@ class VariableReferenceCheck implements HotSwapCompilerPass {
               // better yet, make sure the generated code never violates
               // the requirement to pass aggressive var check!
               DiagnosticType diagnosticType;
-              if (v.isLet() || v.isConst()
+              if (v.isLet() || v.isConst() || v.isClass()
                   || letConstShadowsVar || shadowCatchVar) {
                 diagnosticType = REDECLARED_VARIABLE_ERROR;
+              } else if (reference.getNode().getParent().isCatch()) {
+                return;
               } else {
                 diagnosticType = REDECLARED_VARIABLE;
               }
               compiler.report(
                   JSError.make(
                       referenceNode,
-                      checkLevel,
                       diagnosticType, v.name));
               break;
             }
@@ -254,7 +250,7 @@ class VariableReferenceCheck implements HotSwapCompilerPass {
         if (!shadowDetected && isDeclaration && (letConstShadowsVar || shadowCatchVar)
             && v.getScope() == reference.getScope()) {
           compiler.report(
-              JSError.make(referenceNode, checkLevel, REDECLARED_VARIABLE_ERROR, v.name));
+              JSError.make(referenceNode, REDECLARED_VARIABLE_ERROR, v.name));
         }
 
         if (isUnhoistedNamedFunction && !isDeclaration && isDeclaredInScope) {
@@ -291,8 +287,7 @@ class VariableReferenceCheck implements HotSwapCompilerPass {
               isUndeclaredReference = true;
               compiler.report(
                   JSError.make(reference.getNode(),
-                               checkLevel,
-                               (v.isLet() || v.isConst() || v.isParam())
+                               (v.isLet() || v.isConst() || v.isClass() || v.isParam())
                                    ? EARLY_REFERENCE_ERROR
                                    : EARLY_REFERENCE, v.name));
             }
@@ -301,18 +296,12 @@ class VariableReferenceCheck implements HotSwapCompilerPass {
 
         if (!isDeclaration && !isUndeclaredReference
             && v.isConst() && reference.isLvalue()) {
-          compiler.report(
-              JSError.make(referenceNode,
-                           checkLevel,
-                           REASSIGNED_CONSTANT, v.name));
+          compiler.report(JSError.make(referenceNode, REASSIGNED_CONSTANT, v.name));
         }
 
-        if (isDeclaration && !v.isVar()
+        if (isDeclaration && !reference.isVarDeclaration()
             && reference.getGrandparent().isAddedBlock()) {
-          compiler.report(
-              JSError.make(referenceNode,
-                           checkLevel,
-                           DECLARATION_NOT_DIRECTLY_IN_BLOCK, v.name));
+          compiler.report(JSError.make(referenceNode, DECLARATION_NOT_DIRECTLY_IN_BLOCK, v.name));
         }
 
         if (isDeclaration) {

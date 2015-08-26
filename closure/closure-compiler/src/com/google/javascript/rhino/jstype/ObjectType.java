@@ -49,6 +49,8 @@ import com.google.javascript.rhino.JSDocInfo;
 import com.google.javascript.rhino.Node;
 import com.google.javascript.rhino.ObjectTypeI;
 
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 
@@ -473,6 +475,12 @@ public abstract class ObjectType
     return slot == null ? false : !slot.isTypeInferred();
   }
 
+  @Override
+  public boolean isStructuralType() {
+    FunctionType constructor = this.getConstructor();
+    return constructor != null && constructor.isStructuralType();
+  }
+
   /**
    * Whether the given property is declared on this object.
    */
@@ -635,5 +643,17 @@ public abstract class ObjectType
    */
   public Iterable<ObjectType> getCtorExtendedInterfaces() {
     return ImmutableSet.of();
+  }
+
+  /**
+   * get the map of properties to types covered in an object type
+   * @return a Map that maps the property's name to the property's type
+   */
+  public Map<String, JSType> getPropertyTypeMap() {
+    Map<String, JSType> propTypeMap = new HashMap<String, JSType>();
+    for (String name : this.getPropertyNames()) {
+      propTypeMap.put(name, this.getPropertyType(name));
+    }
+    return propTypeMap;
   }
 }

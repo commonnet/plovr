@@ -34,7 +34,6 @@ public class ConfigTest {
     assertFalse(options.getProcessObjectPropertyString());
     assertFalse(options.isExternExportsEnabled());
     assertNull(options.checkMissingGetCssNameBlacklist);
-    assertFalse(options.getAcceptConstKeyword());
     assertNull(options.getOutputCharset());
     assertEquals(LanguageMode.ECMASCRIPT3, options.getLanguageIn());
 
@@ -52,7 +51,6 @@ public class ConfigTest {
     assertTrue(options.getProcessObjectPropertyString());
     assertTrue(options.isExternExportsEnabled());
     assertEquals("hello world", options.checkMissingGetCssNameBlacklist);
-    assertTrue(options.getAcceptConstKeyword());
     assertEquals(Charsets.UTF_8, options.getOutputCharset());
     assertEquals(LanguageMode.ECMASCRIPT5, options.getLanguageIn());
   }

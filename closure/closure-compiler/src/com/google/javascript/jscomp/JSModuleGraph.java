@@ -28,10 +28,13 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParseException;
 import com.google.gson.JsonPrimitive;
+import com.google.javascript.jscomp.deps.ClosureSortedDependencies;
+import com.google.javascript.jscomp.deps.Es6SortedDependencies;
 import com.google.javascript.jscomp.deps.SortedDependencies;
 import com.google.javascript.jscomp.deps.SortedDependencies.CircularDependencyException;
 import com.google.javascript.jscomp.deps.SortedDependencies.MissingProvideException;
 import com.google.javascript.jscomp.graph.LinkedDirectedGraph;
+import com.google.javascript.jscomp.parsing.parser.util.format.SimpleFormat;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -48,8 +51,8 @@ import java.util.TreeSet;
 /**
  * A {@link JSModule} dependency graph that assigns a depth to each module and
  * can answer depth-related queries about them. For the purposes of this class,
- * a module's depth is defined as the number of hops in the longest path from
- * the module to a module with no dependencies.
+ * a module's depth is defined as the number of hops in the longest (non cyclic)
+ * path from the module to a module with no dependencies.
  *
  */
 public final class JSModuleGraph {
@@ -98,7 +101,7 @@ public final class JSModuleGraph {
       for (JSModule dep : module.getDependencies()) {
         int depDepth = dep.getDepth();
         if (depDepth < 0) {
-          throw new ModuleDependenceException(String.format(
+          throw new ModuleDependenceException(SimpleFormat.format(
               "Modules not in dependency order: %s preceded %s",
               module.getName(), dep.getName()),
               module, dep);
@@ -372,7 +375,9 @@ public final class JSModuleGraph {
           MissingModuleException {
 
     SortedDependencies<CompilerInput> sorter =
-        new SortedDependencies<>(inputs);
+        depOptions.isEs6ModuleOrder()
+            ? new Es6SortedDependencies<>(inputs) : new ClosureSortedDependencies<>(inputs);
+
     Iterable<CompilerInput> entryPointInputs = createEntryPointInputs(
         depOptions, inputs, sorter);
 

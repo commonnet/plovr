@@ -55,6 +55,12 @@ public class NodeTraversal {
    */
   private final Deque<Node> scopeRoots = new ArrayDeque<>();
 
+  /**
+   * A stack of scope roots that are valid cfg roots. All cfg roots that have not been created
+   * are represented in this Deque.
+   */
+  private final Deque<Node> cfgRoots = new ArrayDeque<>();
+
 
   /**
    * Stack of control flow graphs (CFG). There is one CFG per scope. CFGs
@@ -79,7 +85,7 @@ public class NodeTraversal {
 
   /** Callback for passes that iterate over a list of functions */
   public interface FunctionCallback {
-    void visit(AbstractCompiler compiler, Node fnRoot);
+    void enterFunction(AbstractCompiler compiler, Node fnRoot);
   }
 
   /**
@@ -372,7 +378,18 @@ public class NodeTraversal {
       traverseBranch(body, n);
 
       popScope();
+    } else if (n.isBlock()) {
+      if (inputId == null) {
+        inputId = NodeUtil.getInputId(n);
+      }
+      sourceName = getSourceName(n);
+      curNode = n;
+      pushScope(s);
+      traverseBranch(n, n.getParent());
+
+      popScope();
     } else {
+      Preconditions.checkState(s.isGlobal(), "Expected global scope. Got:", s);
       traverseWithScope(n, s);
     }
   }
@@ -407,7 +424,7 @@ public class NodeTraversal {
    * @param refinedScope the refined scope of the scope currently at the top of
    *     the scope stack or in trivial cases that very scope or {@code null}
    */
-  protected void traverseInnerNode(Node node, Node parent, Scope refinedScope) {
+  void traverseInnerNode(Node node, Node parent, Scope refinedScope) {
     Preconditions.checkNotNull(parent);
     if (inputId == null) {
       inputId = NodeUtil.getInputId(node);
@@ -512,11 +529,12 @@ public class NodeTraversal {
         @Override
         public final boolean shouldTraverse(NodeTraversal t, Node n, Node p) {
           if ((n == jsRoot || n.isFunction()) && comp.hasScopeChanged(n)) {
-            cb.visit(comp, n);
+            cb.enterFunction(comp, n);
           }
           return true;
         }
-      });
+      },
+      new Es6SyntacticScopeCreator(compiler));
     t.traverse(jsRoot);
   }
 
@@ -525,6 +543,15 @@ public class NodeTraversal {
    */
   public static void traverse(AbstractCompiler compiler, Node root, Callback cb) {
     NodeTraversal t = new NodeTraversal(compiler, cb);
+    t.traverse(root);
+  }
+
+  /**
+   * Traverses using the ES6SyntacticScopeCreator
+   */
+  // TODO (stephshi): rename to "traverse" when the old traverse method is no longer used
+  public static void traverseEs6(AbstractCompiler compiler, Node root, Callback cb) {
+    NodeTraversal t = new NodeTraversal(compiler, cb, new Es6SyntacticScopeCreator(compiler));
     t.traverse(root);
   }
 
@@ -624,15 +651,8 @@ public class NodeTraversal {
 
   /** Examines the functions stack for the last instance of a function node. */
   public Node getEnclosingFunction() {
-    if (scopes.size() + scopeRoots.size() < 2) {
-      return null;
-    } else {
-      if (scopeRoots.isEmpty()) {
-        return scopes.peek().getRootNode();
-      } else {
-        return scopeRoots.peek();
-      }
-    }
+    Node root = getCfgRoot();
+    return root.isFunction() ? root : null;
   }
 
   /** Creates a new scope (e.g. when entering a function). */
@@ -640,7 +660,10 @@ public class NodeTraversal {
     Preconditions.checkState(curNode != null);
     compiler.setScope(node);
     scopeRoots.push(node);
-    cfgs.push(null);
+    if (NodeUtil.isValidCfgRoot(node)) {
+      cfgRoots.push(node);
+      cfgs.push(null);
+    }
     if (scopeCallback != null) {
       scopeCallback.enterScope(this);
     }
@@ -659,7 +682,9 @@ public class NodeTraversal {
     Preconditions.checkState(curNode != null);
     compiler.setScope(s.getRootNode());
     scopes.push(s);
-    cfgs.push(null);
+    if (NodeUtil.isValidCfgRoot(s.getRootNode())) {
+      cfgs.push(null);
+    }
     if (!quietly && scopeCallback != null) {
       scopeCallback.enterScope(this);
     }
@@ -677,12 +702,18 @@ public class NodeTraversal {
     if (!quietly && scopeCallback != null) {
       scopeCallback.exitScope(this);
     }
+    Node scopeRoot;
     if (scopeRoots.isEmpty()) {
-      scopes.pop();
+      scopeRoot = scopes.pop().getRootNode();
     } else {
-      scopeRoots.pop();
+      scopeRoot = scopeRoots.pop();
     }
-    cfgs.pop();
+    if (NodeUtil.isValidCfgRoot(scopeRoot)) {
+      cfgs.pop();
+      if (!cfgRoots.isEmpty()) {
+        Preconditions.checkState(cfgRoots.pop() == scopeRoot);
+      }
+    }
     if (hasScope()) {
       compiler.setScope(getScopeRoot());
     }
@@ -701,6 +732,7 @@ public class NodeTraversal {
       scopes.push(scope);
     }
     scopeRoots.clear();
+    cfgRoots.clear();
     // No need to call compiler.setScope; the top scopeRoot is now the top scope
     return scope;
   }
@@ -716,7 +748,7 @@ public class NodeTraversal {
   public ControlFlowGraph<Node> getControlFlowGraph() {
     if (cfgs.peek() == null) {
       ControlFlowAnalysis cfa = new ControlFlowAnalysis(compiler, false, true);
-      cfa.process(null, getScopeRoot());
+      cfa.process(null, getCfgRoot());
       cfgs.pop();
       cfgs.push(cfa.getCfg());
     }
@@ -732,15 +764,35 @@ public class NodeTraversal {
     }
   }
 
+  private Node getCfgRoot() {
+    if (cfgRoots.isEmpty()) {
+      Scope currScope = scopes.peek();
+      while (currScope.isBlockScope()) {
+        currScope = currScope.getParent();
+      }
+      return currScope.getRootNode();
+    } else {
+      return cfgRoots.peek();
+    }
+  }
+
   /**
    * Determines whether the traversal is currently in the global scope.
    */
   boolean inGlobalScope() {
-    return getScopeDepth() <= 1;
+    return getScopeDepth() == 0;
+  }
+
+  // Not dual of inGlobalScope, because of block scoping.
+  // They both return false in an inner block at top level.
+  boolean inFunction() {
+    return getCfgRoot().isFunction();
   }
 
   int getScopeDepth() {
-    return scopes.size() + scopeRoots.size();
+    int sum = scopes.size() + scopeRoots.size();
+    Preconditions.checkState(sum > 0);
+    return sum - 1; // Use 0-based scope depth to be consistent within the compiler
   }
 
   public boolean hasScope() {

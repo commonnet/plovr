@@ -15,6 +15,7 @@
  */
 package com.google.javascript.jscomp;
 
+import com.google.javascript.jscomp.parsing.parser.util.format.SimpleFormat;
 
 /**
  * Checks for combinations of options that are incompatible, i.e. will produce
@@ -41,22 +42,6 @@ final class CompilerOptionsPreprocessor {
           + "remove_unused_prototype_properties to be turned on.");
     }
 
-    if (options.getLanguageIn() == options.getLanguageOut()) {
-      // No conversion.
-    } else if (!options.getLanguageIn().isEs6OrHigher()
-        && !options.getAllowEs6Out()) {
-      throw new InvalidOptionsException(
-          "Can only convert code from ES6 to a lower ECMAScript version."
-          + " Cannot convert from %s to %s.",
-          options.getLanguageIn(), options.getLanguageOut());
-    }
-
-    if (options.getLanguageOut().isEs6OrHigher() && !options.getAllowEs6Out()) {
-      throw new InvalidOptionsException(
-          "ES6 is only supported for transpilation to a lower ECMAScript"
-          + " version. Set --language_out to ES3, ES5, or ES5_strict.");
-    }
-
     if (!options.inlineFunctions
         && options.maxFunctionSizeAfterInlining
         != CompilerOptions.UNLIMITED_FUN_SIZE_AFTER_INLINING) {
@@ -66,14 +51,8 @@ final class CompilerOptionsPreprocessor {
     }
 
     if (options.useNewTypeInference) {
-      options.checkTypes = false;
-      options.inferTypes = false;
       options.checkMissingReturn = CheckLevel.OFF;
       options.checkGlobalThisLevel = CheckLevel.OFF;
-      // There is also overlap in the warnings of GlobalTypeInfo and VarCheck
-      // and VariableReferenceCheck.
-      // But VarCheck is always added in DefaultPassConfig, and
-      // VariableReferenceCheck finds warnings that we don't, so leave them on.
     }
 
     if (options.jqueryPass && options.closurePass) {
@@ -95,7 +74,7 @@ final class CompilerOptionsPreprocessor {
    */
   public static class InvalidOptionsException extends RuntimeException {
     private InvalidOptionsException(String message, Object... args) {
-      super(String.format(message, args));
+      super(SimpleFormat.format(message, args));
     }
   }
 

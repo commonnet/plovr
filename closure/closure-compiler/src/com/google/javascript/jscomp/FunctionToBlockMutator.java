@@ -183,7 +183,9 @@ class FunctionToBlockMutator {
                 compiler.getCodingConvention(),
                 idSupplier,
                 "inline_",
-                isCallInLoop)));
+                isCallInLoop,
+                true,
+                null)));
     // Make label names unique to this instance.
     new RenameLabels(compiler, new LabelNameSupplier(idSupplier), false)
         .process(null, fnNode);
@@ -266,7 +268,7 @@ class FunctionToBlockMutator {
               String newName = getUniqueThisName();
               Node newValue = entry.getValue().cloneTree();
               Node newNode = NodeUtil.newVarNode(newName, newValue)
-                  .copyInformationFromForTree(newValue);
+                  .useSourceInfoIfMissingFromForTree(newValue);
               newVars.add(0, newNode);
               // Remove the parameter from the list to replace.
               newArgMap.put(THIS_MARKER,
@@ -276,7 +278,7 @@ class FunctionToBlockMutator {
           } else {
             Node newValue = entry.getValue().cloneTree();
             Node newNode = NodeUtil.newVarNode(name, newValue)
-                .copyInformationFromForTree(newValue);
+                .useSourceInfoIfMissingFromForTree(newValue);
             newVars.add(0, newNode);
             // Remove the parameter from the list to replace.
             newArgMap.remove(name);
@@ -383,7 +385,7 @@ class FunctionToBlockMutator {
     Node srcLocation = node;
     Node retVal = NodeUtil.newUndefinedNode(srcLocation);
     Node resultNode = createAssignStatementNode(resultName, retVal);
-    resultNode.copyInformationFromForTree(node);
+    resultNode.useSourceInfoIfMissingFromForTree(node);
 
     node.addChildrenToBack(resultNode);
   }
@@ -405,7 +407,7 @@ class FunctionToBlockMutator {
     if (resultNode == null) {
       block.removeChild(ret);
     } else {
-      resultNode.copyInformationFromForTree(ret);
+      resultNode.useSourceInfoIfMissingFromForTree(ret);
       block.replaceChild(ret, resultNode);
     }
   }
@@ -491,10 +493,10 @@ class FunctionToBlockMutator {
       Node breakNode = IR.breakNode(IR.labelName(labelName));
 
       // Replace the node in parent, and reset current to the first new child.
-      breakNode.copyInformationFromForTree(current);
+      breakNode.useSourceInfoIfMissingFromForTree(current);
       parent.replaceChild(current, breakNode);
       if (resultNode != null) {
-        resultNode.copyInformationFromForTree(current);
+        resultNode.useSourceInfoIfMissingFromForTree(current);
         parent.addChildBefore(resultNode, breakNode);
       }
       current = breakNode;

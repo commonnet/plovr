@@ -37,12 +37,11 @@ public final class CollapsePropertiesTest extends CompilerTestCase {
   }
 
   @Override public CompilerPass getProcessor(Compiler compiler) {
-    return new CollapseProperties(compiler);
+    return new CollapseProperties(compiler, true);
   }
 
   @Override
   public void setUp() {
-    enableLineNumberCheck(true);
     enableNormalize(true);
     compareJsDoc = false;
   }
@@ -54,6 +53,8 @@ public final class CollapsePropertiesTest extends CompilerTestCase {
   public void testCollapse() {
     test("var a = {}; a.b = {}; var c = a.b;",
          "var a$b = {}; var c = a$b");
+
+    testSame("var a = {}; /** @nocollapse */ a.b;");
   }
 
   public void testMultiLevelCollapse() {
@@ -318,10 +319,8 @@ public final class CollapsePropertiesTest extends CompilerTestCase {
     test("/** @enum */ var a = {b: 0, c: 1};",
          "var a$b = 0; var a$c = 1;");
 
-    // @nocollapse on enum keys is ignored
     test("/** @enum */ var a = { /** @nocollapse */ b: 0, c: 1};",
-        "var a$b = 0; var a$c = 1;", null,
-        CollapseProperties.INVALID_NOCOLLAPSE);
+        "var a$c = 1; var a = {b: 0};");
   }
 
   public void testEnumDepth2() {
@@ -334,14 +333,13 @@ public final class CollapsePropertiesTest extends CompilerTestCase {
   public void testAliasCreatedForEnumDepth1_1() {
     // An enum's values are always collapsed, even if the enum object is
     // referenced in a such a way that an alias is created for it.
+    // Unless an enum property has @nocollapse
     test("/** @enum */ var a = {b: 0}; var c = a; c.b = 1; a.b != c.b;",
          "var a$b = 0; var a = {b: a$b}; var c = a; c.b = 1; a$b != c.b;");
 
-    // @nocollapse on enum keys is also ignored
     test("/** @enum */ var a = { /** @nocollapse */ b: 0}; var c = a; c.b = 1;"
-        + "a.b != c.b;",
-        "var a$b = 0; var a = {b: a$b}; var c = a; c.b = 1; a$b != c.b;",
-        null, CollapseProperties.INVALID_NOCOLLAPSE);
+        + "a.b == c.b;",
+        "var a = {b: 0}; var c = a; c.b = 1; a.b == c.b;");
   }
 
   public void testAliasCreatedForEnumDepth1_2() {
@@ -368,12 +366,10 @@ public final class CollapsePropertiesTest extends CompilerTestCase {
     testSame("var a = {}; /** @nocollapse @enum */ a.b = {c: 0};"
         + "var d = a.b; d.c = 1; a.b.c == d.c;");
 
-    // @nocollapse on enum keys is ignored
     test("var a = {}; /** @enum */ a.b = {/** @nocollapse */ c: 0};"
-        + "var d = a.b; d.c = 1; a.b.c != d.c;",
-        "var a$b$c = 0; var a$b = {c: a$b$c};"
-        + "var d = a$b; d.c = 1; a$b$c != d.c;", null,
-        CollapseProperties.INVALID_NOCOLLAPSE);
+        + "var d = a.b; d.c = 1; a.b.c == d.c;",
+        "var a$b = {c: 0};"
+        + "var d = a$b; d.c = 1; a$b.c == d.c;");
   }
 
   public void testAliasCreatedForEnumDepth2_2() {
@@ -443,13 +439,15 @@ public final class CollapsePropertiesTest extends CompilerTestCase {
     // People don't typically iterate through static members of a class or
     // refer to them using an alias for the class name.
     test("/** @constructor */ var a = function(){}; a.b = 1; "
-         + "var c = a; c.b = 2; a.b != c.b;",
-         "var a = function(){}; var a$b = 1; var c = a; c.b = 2; a$b != c.b;");
+         + "var c = a; c.b = 2; a.b == c.b;",
+         "var a = function(){}; var a$b = 1; var c = null; a$b = 2; a$b == a$b;");
 
     // Sometimes we want to prevent static members of a constructor from
     // being collapsed.
-    testSame("/** @constructor */ var a = function(){};"
-        + "/** @nocollapse */ a.b = 1; var c = a; c.b = 2; a.b == c.b;");
+    test("/** @constructor */ var a = function(){};"
+        + "/** @nocollapse */ a.b = 1; var c = a; c.b = 2; a.b == c.b;",
+        "/** @constructor */ var a = function(){};"
+        + "/** @nocollapse */ a.b = 1; var c = null; a.b = 2; a.b == a.b;");
   }
 
   public void testAliasCreatedForFunctionDepth1_2() {
@@ -492,15 +490,15 @@ public final class CollapsePropertiesTest extends CompilerTestCase {
   public void testAliasCreatedForCtorDepth2() {
     test("var a = {}; /** @constructor */ a.b = function() {}; "
          + "a.b.c = 1; var d = a.b;"
-         + "a.b.c != d.c;",
-         "var a$b = function() {}; var a$b$c = 1; var d = a$b;"
-         + "a$b$c != d.c;");
+         + "a.b.c == d.c;",
+         "var a$b = function() {}; var a$b$c = 1; var d = null;"
+         + "a$b$c == a$b$c;");
 
     test("var a = {}; /** @constructor */ a.b = function() {}; "
         + "/** @nocollapse */ a.b.c = 1; var d = a.b;"
         + "a.b.c == d.c;",
-        "var a$b = function() {}; a$b.c = 1; var d = a$b;"
-        + "a$b.c == d.c;");
+        "var a$b = function() {}; a$b.c = 1; var d = null;"
+        + "a$b.c == a$b.c;");
   }
 
   public void testAliasCreatedForClassDepth1_1() {
@@ -868,16 +866,18 @@ public final class CollapsePropertiesTest extends CompilerTestCase {
   }
 
   public void testAddPropertyToUncollapsibleNamedCtorInLocalScopeDepth1() {
-    testSame(
-          "/** @constructor */ function a() {} var a$b; var c = a; "
-          + "(function() {a$b = 0;})(); a$b;");
+    test(
+        "/** @constructor */ function a() {} var a$b; var c = a; "
+        + "(function() {a$b = 0;})(); a$b;",
+        "/** @constructor */ function a() {} var a$b; var c = null; "
+        + "(function() {a$b = 0;})(); a$b;");
   }
 
   public void testAddPropertyToUncollapsibleCtorInLocalScopeDepth1() {
     test("/** @constructor */ var a = function() {}; var c = a; "
          + "(function() {a.b = 0;})(); a.b;",
          "var a = function() {}; var a$b; "
-         + "var c = a; (function() {a$b = 0;})(); a$b;");
+         + "var c = null; (function() {a$b = 0;})(); a$b;");
   }
 
   public void testAddPropertyToUncollapsibleObjectInLocalScopeDepth2() {
@@ -897,7 +897,7 @@ public final class CollapsePropertiesTest extends CompilerTestCase {
   public void testAddPropertyToUncollapsibleCtorInLocalScopeDepth2() {
     test("var a = {}; /** @constructor */ a.b = function (){}; var d = a.b;"
          + "(function() {a.b.c = 0;})(); a.b.c;",
-         "var a$b = function (){}; var a$b$c; var d = a$b;"
+         "var a$b = function (){}; var a$b$c; var d = null;"
          + "(function() {a$b$c = 0;})(); a$b$c;");
   }
 
@@ -934,7 +934,7 @@ public final class CollapsePropertiesTest extends CompilerTestCase {
   public void testAddPropertyToChildOfUncollapsibleCtorInLocalScope() {
     test("/** @constructor */ var a = function() {}; a.b = {x: 0}; var c = a;"
          + "(function() {a.b.y = 0;})(); a.b.y;",
-         "var a = function() {}; var a$b$x = 0; var a$b$y; var c = a;"
+         "var a = function() {}; var a$b$x = 0; var a$b$y; var c = null;"
          + "(function() {a$b$y = 0;})(); a$b$y;");
   }
 
@@ -1501,9 +1501,31 @@ public final class CollapsePropertiesTest extends CompilerTestCase {
          + "var a$d = CreateClass({c: a$b.prototype.c});");
   }
 
-  public void testCrashInCommaOperator() {
+  public void testCommaOperator() {
     test("var a = {}; a.b = function() {},a.b();",
          "var a$b; a$b=function() {},a$b();");
+
+    test(
+        "var ns = {};\n"
+        + "ns.Foo = {};\n"
+        + "var Baz = {};\n"
+        + "Baz.Foo = ns.Foo;\n"
+        + "(Baz.Foo.bar = 10, 123);",
+
+        "var Baz$Foo=null;\n"
+        + "var ns$Foo$bar;\n"
+        + "(ns$Foo$bar = 10, 123);");
+
+    test(
+        "var ns = {};\n"
+        + "ns.Foo = {};\n"
+        + "var Baz = {};\n"
+        + "Baz.Foo = ns.Foo;\n"
+        + "function f() { (Baz.Foo.bar = 10, 123); }",
+
+        "var ns$Foo$bar;\n"
+        + "var Baz$Foo=null;\n"
+        + "function f() { (ns$Foo$bar = 10, 123); }");
   }
 
   public void testCrashInNestedAssign() {
@@ -2098,11 +2120,77 @@ public final class CollapsePropertiesTest extends CompilerTestCase {
     test("/** @enum { { a: { b: number}} } */"
         + "var e = { KEY1: { a: { /** @nocollapse */ b: 123}},\n"
         + "  KEY2: { a: { b: 456}}\n"
-        + "}", null, null, CollapseProperties.INVALID_NOCOLLAPSE);
+        + "}",
+        "var e$KEY1$a={b:123}; var e$KEY2$a$b=456;");
 
     test("/** @enum */ var e = { A: 1, B: 2 };\n"
         + "/** @type {{ c: { d: number } }} */ e.name1 = {"
-        + "  c: { /** @nocollapse */ d: 123 } };", null, null,
-        CollapseProperties.INVALID_NOCOLLAPSE);
+        + "  c: { /** @nocollapse */ d: 123 } };",
+        "var e$A=1; var e$B=2; var e$name1$c={d:123};");
+
+    test("/** @enum */ var e = { A: 1, B: 2};\n"
+        + "/** @nocollapse */ e.foo = { bar: true };",
+        "var e$A=1; var e$B=2; var e = {}; e.foo = { bar: true };");
+  }
+
+  public void testCodeGeneratedByGoogModule() {
+    // The static property is added to the exports object
+    test(
+        "var $jscomp = {};\n" +
+        "$jscomp.scope = {};\n" +
+        "/** @constructor */\n" +
+        "$jscomp.scope.Foo = function() {};\n" +
+        "var exports = $jscomp.scope.Foo;\n" +
+        "exports.staticprop = {A:1};\n" +
+        "var y = exports.staticprop.A;",
+
+        "var $jscomp$scope$Foo = function() {}\n" +
+        "var exports = null;\n" +
+        "var $jscomp$scope$Foo$staticprop$A = 1;\n" +
+        "var y = $jscomp$scope$Foo$staticprop$A;");
+
+    // The static property is added to the constructor
+    test(
+        "var $jscomp = {};\n" +
+        "$jscomp.scope = {};\n" +
+        "/** @constructor */\n" +
+        "$jscomp.scope.Foo = function() {};\n" +
+        "$jscomp.scope.Foo.staticprop = {A:1};\n" +
+        "var exports = $jscomp.scope.Foo;\n" +
+        "var y = exports.staticprop.A;",
+
+        "var $jscomp$scope$Foo = function() {}\n" +
+        "var $jscomp$scope$Foo$staticprop$A = 1;\n" +
+        "var exports = null;\n" +
+        "var y = $jscomp$scope$Foo$staticprop$A;");
+  }
+
+  public void testInlineCtorInObjLit() {
+    test(
+        "/** @constructor */\n"
+        + "function Foo() {}\n"
+        + "/** @constructor */\n"
+        + "var Bar = Foo;\n"
+        + "var objlit = {\n"
+        + "  'prop' : Bar\n"
+        + "};",
+
+        "function Foo() {}\n"
+        + "var Bar = null;\n"
+        + "var objlit$prop = Foo;");
+  }
+
+  public void testDontCrashCtorAliasWithEnum() {
+    test(
+        "var ns = {};\n"
+        + "/** @constructor */\n"
+        + "ns.Foo = function () {};\n"
+        + "var Bar = ns.Foo;\n"
+        + "/** @const @enum */\n"
+        + "Bar.prop = { A: 1 };",
+
+        "var ns$Foo = function(){};\n"
+        + "var Bar = null;\n"
+        + "var ns$Foo$prop$A = 1");
   }
 }

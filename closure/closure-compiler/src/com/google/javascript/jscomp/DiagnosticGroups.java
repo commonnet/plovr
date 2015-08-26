@@ -18,15 +18,19 @@ package com.google.javascript.jscomp;
 
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
+import com.google.javascript.jscomp.lint.CheckEmptyStatements;
 import com.google.javascript.jscomp.lint.CheckEnums;
+import com.google.javascript.jscomp.lint.CheckForInOverArray;
 import com.google.javascript.jscomp.lint.CheckInterfaces;
-import com.google.javascript.jscomp.lint.CheckJSDoc;
+import com.google.javascript.jscomp.lint.CheckJSDocStyle;
 import com.google.javascript.jscomp.lint.CheckNullableReturn;
 import com.google.javascript.jscomp.lint.CheckPrototypeProperties;
 import com.google.javascript.jscomp.newtypes.JSTypeCreatorFromJSDoc;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Named groups of DiagnosticTypes exposed by Compiler.
@@ -35,6 +39,9 @@ import java.util.Map;
 public class DiagnosticGroups {
   static final DiagnosticType UNUSED =
       DiagnosticType.warning("JSC_UNUSED", "{0}");
+
+  public static final Set<String> wildcardExcludedGroups =
+      ImmutableSet.of("reportUnknownTypes");
 
   public DiagnosticGroups() {}
 
@@ -66,7 +73,7 @@ public class DiagnosticGroups {
   }
 
   /** Get the registered diagnostic groups, indexed by name. */
-  protected Map<String, DiagnosticGroup> getRegisteredGroups() {
+  public Map<String, DiagnosticGroup> getRegisteredGroups() {
     return ImmutableMap.copyOf(groupsByName);
   }
 
@@ -83,16 +90,16 @@ public class DiagnosticGroups {
   // to parser/ParserConfig.properties
   static final String DIAGNOSTIC_GROUP_NAMES =
       "accessControls, ambiguousFunctionDecl, checkEventfulObjectDisposal, "
-      + "checkRegExp, checkStructDictInheritance, checkTypes, checkVars, "
+      + "checkRegExp, checkTypes, checkVars, "
       + "conformanceViolations, const, constantProperty, deprecated, "
       + "deprecatedAnnotations, duplicateMessage, es3, "
       + "es5Strict, externsValidation, fileoverviewTags, globalThis, "
       + "inferredConstCheck, internetExplorerChecks, invalidCasts, "
       + "misplacedTypeAnnotation, missingGetCssName, missingProperties, "
-      + "missingProvide, missingRequire, missingReturn,"
+      + "missingProvide, missingRequire, missingReturn, msgDescriptions"
       + "newCheckTypes, nonStandardJsDocs, reportUnknownTypes, suspiciousCode, "
       + "strictModuleDepCheck, typeInvalidation, "
-      + "undefinedNames, undefinedVars, unknownDefines, uselessCode, "
+      + "undefinedNames, undefinedVars, unknownDefines, unnecessaryCasts, uselessCode, "
       + "useOfGoogBase, visibility";
 
   public static final DiagnosticGroup GLOBAL_THIS =
@@ -215,21 +222,23 @@ public class DiagnosticGroups {
           GlobalTypeInfo.ALL_DIAGNOSTICS,
           NewTypeInference.ALL_DIAGNOSTICS);
 
-  static {
-      DiagnosticGroups.registerGroup("newCheckTypesWarningsOverload",
+  public static final DiagnosticGroup NEW_CHECK_TYPES_ALL_CHECKS =
+      DiagnosticGroups.registerGroup("newCheckTypesAllChecks",
+          JSTypeCreatorFromJSDoc.CONFLICTING_SHAPE_TYPE,
           NewTypeInference.NULLABLE_DEREFERENCE);
 
+  static {
       // Warnings that are absent in closure library
       DiagnosticGroups.registerGroup("newCheckTypesClosureClean",
 //           JSTypeCreatorFromJSDoc.BAD_JSDOC_ANNOTATION,
           JSTypeCreatorFromJSDoc.CONFLICTING_EXTENDED_TYPE,
           JSTypeCreatorFromJSDoc.CONFLICTING_IMPLEMENTED_TYPE,
-//          JSTypeCreatorFromJSDoc.CONFLICTING_SHAPE_TYPE,
           JSTypeCreatorFromJSDoc.DICT_IMPLEMENTS_INTERF,
           JSTypeCreatorFromJSDoc.EXTENDS_NON_OBJECT,
           JSTypeCreatorFromJSDoc.EXTENDS_NOT_ON_CTOR_OR_INTERF,
           JSTypeCreatorFromJSDoc.IMPLEMENTS_WITHOUT_CONSTRUCTOR,
           JSTypeCreatorFromJSDoc.INHERITANCE_CYCLE,
+//          JSTypeCreatorFromJSDoc.UNION_IS_UNINHABITABLE,
           GlobalTypeInfo.ANONYMOUS_NOMINAL_TYPE,
           GlobalTypeInfo.CANNOT_INIT_TYPEDEF,
           GlobalTypeInfo.CANNOT_OVERRIDE_FINAL_METHOD,
@@ -244,7 +253,7 @@ public class DiagnosticGroups {
 //           GlobalTypeInfo.INVALID_PROP_OVERRIDE,
           GlobalTypeInfo.LENDS_ON_BAD_TYPE,
           GlobalTypeInfo.MALFORMED_ENUM,
-//           GlobalTypeInfo.MISPLACED_CONST_ANNOTATION,
+          GlobalTypeInfo.MISPLACED_CONST_ANNOTATION,
 //           GlobalTypeInfo.REDECLARED_PROPERTY,
           GlobalTypeInfo.STRUCTDICT_WITHOUT_CTOR,
           GlobalTypeInfo.UNDECLARED_NAMESPACE,
@@ -256,15 +265,15 @@ public class DiagnosticGroups {
           TypeCheck.UNKNOWN_OVERRIDE,
           TypeValidator.INTERFACE_METHOD_NOT_IMPLEMENTED,
           NewTypeInference.ASSERT_FALSE,
-          NewTypeInference.CALL_FUNCTION_WITH_BOTTOM_FORMAL,
           NewTypeInference.CANNOT_BIND_CTOR,
-//           NewTypeInference.CONST_REASSIGNED,
+          NewTypeInference.CONST_REASSIGNED,
           NewTypeInference.CROSS_SCOPE_GOTCHA,
 //           NewTypeInference.FAILED_TO_UNIFY,
 //           NewTypeInference.FORIN_EXPECTS_OBJECT,
           NewTypeInference.FORIN_EXPECTS_STRING_KEY,
 //           NewTypeInference.GOOG_BIND_EXPECTS_FUNCTION,
 //           NewTypeInference.INVALID_ARGUMENT_TYPE,
+//           NewTypeInference.INVALID_CAST,
           NewTypeInference.INVALID_INFERRED_RETURN_TYPE,
 //           NewTypeInference.INVALID_OBJLIT_PROPERTY_TYPE,
 //           NewTypeInference.INVALID_OPERAND_TYPE,
@@ -287,7 +296,6 @@ public class DiagnosticGroups {
           TypeCheck.NOT_CALLABLE,
 //           TypeCheck.WRONG_ARGUMENT_COUNT,
 //           TypeValidator.ILLEGAL_PROPERTY_ACCESS,
-//           TypeValidator.INVALID_CAST,
           TypeValidator.UNKNOWN_TYPEOF_VALUE);
   }
 
@@ -301,9 +309,6 @@ public class DiagnosticGroups {
   public static final DiagnosticGroup REPORT_UNKNOWN_TYPES =
       DiagnosticGroups.registerGroup("reportUnknownTypes",
           TypeCheck.UNKNOWN_EXPR_TYPE);
-
-  public static final DiagnosticGroup CHECK_STRUCT_DICT_INHERITANCE =
-      DiagnosticGroups.registerDeprecatedGroup("checkStructDictInheritance");
 
   public static final DiagnosticGroup CHECK_VARIABLES =
       DiagnosticGroups.registerGroup("checkVars",
@@ -394,11 +399,15 @@ public class DiagnosticGroups {
       DiagnosticGroups.registerGroup("duplicateMessage",
           JsMessageVisitor.MESSAGE_DUPLICATE_KEY);
 
+  public static final DiagnosticGroup MESSAGE_DESCRIPTIONS =
+      DiagnosticGroups.registerGroup("msgDescriptions",
+          JsMessageVisitor.MESSAGE_HAS_NO_DESCRIPTION);
+
   public static final DiagnosticGroup MISPLACED_TYPE_ANNOTATION =
       DiagnosticGroups.registerGroup("misplacedTypeAnnotation",
-          RhinoErrorReporter.MISPLACED_TYPE_ANNOTATION,
-          RhinoErrorReporter.MISPLACED_FUNCTION_ANNOTATION,
-          RhinoErrorReporter.MISPLACED_MSG_ANNOTATION);
+          CheckJSDoc.DISALLOWED_MEMBER_JSDOC,
+          CheckJSDoc.MISPLACED_ANNOTATION,
+          CheckJSDoc.MISPLACED_MSG_ANNOTATION);
 
   public static final DiagnosticGroup SUSPICIOUS_CODE =
       DiagnosticGroups.registerGroup("suspiciousCode",
@@ -409,27 +418,31 @@ public class DiagnosticGroups {
 
   public static final DiagnosticGroup DEPRECATED_ANNOTATIONS =
       DiagnosticGroups.registerGroup("deprecatedAnnotations",
-          RhinoErrorReporter.ANNOTATION_DEPRECATED);
+          CheckJSDoc.ANNOTATION_DEPRECATED);
 
   // These checks are not intended to be enabled as errors. It is
   // recommended that you think of them as "linter" warnings that
   // provide optional suggestions.
   public static final DiagnosticGroup LINT_CHECKS =
       DiagnosticGroups.registerGroup("lintChecks", // undocumented
+          CheckEmptyStatements.USELESS_EMPTY_STATEMENT,
           CheckEnums.DUPLICATE_ENUM_VALUE,
           // TODO(tbreisacher): Consider moving the CheckInterfaces warnings into the
           // checkTypes DiagnosticGroup
           CheckInterfaces.INTERFACE_FUNCTION_NOT_EMPTY,
           CheckInterfaces.INTERFACE_SHOULD_NOT_TAKE_ARGS,
-          CheckJSDoc.MISSING_PARAM_JSDOC,
-          CheckJSDoc.MUST_BE_PRIVATE,
-          CheckJSDoc.OPTIONAL_NAME_NOT_MARKED_OPTIONAL,
-          CheckJSDoc.OPTIONAL_TYPE_NOT_USING_OPTIONAL_NAME,
+          CheckJSDocStyle.MISSING_PARAM_JSDOC,
+          CheckJSDocStyle.MUST_BE_PRIVATE,
+          CheckJSDocStyle.OPTIONAL_PARAM_NOT_MARKED_OPTIONAL,
+          CheckJSDocStyle.OPTIONAL_TYPE_NOT_USING_OPTIONAL_NAME,
           CheckNullableReturn.NULLABLE_RETURN,
           CheckNullableReturn.NULLABLE_RETURN_WITH_NAME,
+          CheckForInOverArray.FOR_IN_OVER_ARRAY,
           CheckPrototypeProperties.ILLEGAL_PROTOTYPE_MEMBER,
           ImplicitNullabilityCheck.IMPLICITLY_NULLABLE_JSDOC,
-          TypeCheck.NON_STRINGIFIABLE_OBJECT_KEY);
+          RhinoErrorReporter.JSDOC_MISSING_BRACES_WARNING,
+          RhinoErrorReporter.JSDOC_MISSING_TYPE_WARNING,
+          RhinoErrorReporter.TOO_MANY_TEMPLATE_PARAMS);
 
   public static final DiagnosticGroup USE_OF_GOOG_BASE =
       DiagnosticGroups.registerGroup("useOfGoogBase",
@@ -460,6 +473,12 @@ public class DiagnosticGroups {
     // For internal use only, so there is no constant for it.
     DiagnosticGroups.registerGroup("invalidProvide",
         ProcessClosurePrimitives.INVALID_PROVIDE_ERROR);
+
+    DiagnosticGroups.registerGroup("lateProvide",
+        ProcessClosurePrimitives.LATE_PROVIDE_ERROR);
+
+    DiagnosticGroups.registerGroup("es6Typed",
+        RhinoErrorReporter.MISPLACED_TYPE_SYNTAX);
   }
 
   /**

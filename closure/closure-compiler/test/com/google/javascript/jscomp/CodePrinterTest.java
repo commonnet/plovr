@@ -1863,12 +1863,12 @@ public final class CodePrinterTest extends CodePrinterTestBase {
 
   public void testPreserveTypeAnnotations() {
     preserveTypeAnnotations = true;
-    assertPrintSame("/**@type {foo}\n*/var bar");
+    assertPrintSame("/**@type {foo} */var bar");
     assertPrintSame(
         "function/** void */f(/** string */s,/** number */n){}");
 
     preserveTypeAnnotations = false;
-    assertPrint("/** @type {foo}\n*/\nvar bar;", "var bar");
+    assertPrint("/** @type {foo} */var bar;", "var bar");
   }
 
   public void testDefaultParameters() {
@@ -1957,6 +1957,9 @@ public final class CodePrinterTest extends CodePrinterTestBase {
     assertPrint("(a=>b)(1)", "((a)=>b)(1)");
     assertPrintSame("var z={x:(a)=>1}");
     assertPrint("(a,b)=>b", "(a,b)=>b");
+    assertPrintSame("()=>(a,b)");
+    assertPrint("(()=>a),b", "()=>a,b");
+    assertPrint("()=>(a=b)", "()=>a=b");
   }
 
   public void testDeclarations() {
@@ -2025,6 +2028,10 @@ public final class CodePrinterTest extends CodePrinterTestBase {
     assertPrintSame("`hello`");
     assertPrint("`hel\rlo`", "`hel\nlo`");
     assertPrint("`hel\r\nlo`", "`hel\nlo`");
+    assertPrint("`hello`\n'world'", "`hello`;\"world\"");
+    assertPrint("`hello`\n`world`", "`hello``world`");
+    assertPrint("var x=`TestA`\n`TemplateB`", "var x=`TestA``TemplateB`");
+    assertPrintSame("`hello``world`");
 
     assertPrintSame("`hello${world}!`");
     assertPrintSame("`hello${world} ${name}!`");

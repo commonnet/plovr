@@ -94,8 +94,6 @@ public final class RefactoringDriver {
 
     options.setWarningLevel(DiagnosticGroups.MISSING_REQUIRE, CheckLevel.ERROR);
 
-    options.setAcceptConstKeyword(true);
-
     return options;
   }
 
@@ -142,7 +140,11 @@ public final class RefactoringDriver {
     }
 
     public Builder addInputsFromCode(String code) {
-      inputs.add(SourceFile.fromCode("input", code));
+      return addInputsFromCode(code, "input");
+    }
+
+    public Builder addInputsFromCode(String code, String filename) {
+      inputs.add(SourceFile.fromCode(filename, code));
       return this;
     }
 

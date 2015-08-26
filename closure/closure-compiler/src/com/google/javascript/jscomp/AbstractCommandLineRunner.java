@@ -18,6 +18,7 @@ package com.google.javascript.jscomp;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 
+import com.google.common.annotations.GwtIncompatible;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Function;
 import com.google.common.base.Joiner;
@@ -94,6 +95,7 @@ import javax.annotation.Nullable;
  *
  * @author bolinfest@google.com (Michael Bolin)
  */
+@GwtIncompatible("Unnecessary")
 abstract class AbstractCommandLineRunner<A extends Compiler,
     B extends CompilerOptions> {
   static final DiagnosticType OUTPUT_SAME_AS_INPUT_ERROR = DiagnosticType.error(
@@ -102,6 +104,9 @@ abstract class AbstractCommandLineRunner<A extends Compiler,
   static final DiagnosticType NO_TREE_GENERATED_ERROR = DiagnosticType.error(
       "JSC_NO_TREE_GENERATED_ERROR",
       "Code contains errors. No tree was generated.");
+
+  static final String WAITING_FOR_INPUT_WARNING =
+      "The compiler is waiting for input via stdin.";
 
   private final CommandLineConfig config;
 
@@ -256,7 +261,18 @@ abstract class AbstractCommandLineRunner<A extends Compiler,
 
     if (config.warningGuards != null) {
       for (WarningGuardSpec.Entry entry : config.warningGuards.entries) {
-        diagnosticGroups.setWarningLevel(options, entry.groupName, entry.level);
+        if ("*".equals(entry.groupName)) {
+          Set<String> groupNames =
+              diagnosticGroups.getRegisteredGroups().keySet();
+          for (String groupName : groupNames) {
+            if (!DiagnosticGroups.wildcardExcludedGroups.contains(groupName)) {
+              diagnosticGroups.setWarningLevel(options, groupName, entry.level);
+            }
+          }
+        } else {
+          diagnosticGroups.setWarningLevel(options, entry.groupName,
+              entry.level);
+        }
       }
     }
 
@@ -375,11 +391,9 @@ abstract class AbstractCommandLineRunner<A extends Compiler,
       }
     }
 
-    options.acceptConstKeyword = config.acceptConstKeyword;
     options.transformAMDToCJSModules = config.transformAMDToCJSModules;
     options.processCommonJSModules = config.processCommonJSModules;
-    options.transpileOnly = config.transpileOnly;
-    options.commonJSModulePathPrefix = config.commonJSModulePathPrefix;
+    options.moduleRoots = config.moduleRoots;
     options.angularPass = config.angularPass;
     options.tracer = config.tracerMode;
     options.useNewTypeInference = config.useNewTypeInference;
@@ -469,6 +483,8 @@ abstract class AbstractCommandLineRunner<A extends Compiler,
           throw new FlagUsageException("Bundle files cannot be generated " +
               "when the input is from stdin.");
         }
+
+        this.err.println(WAITING_FOR_INPUT_WARNING);
         inputs.add(SourceFile.fromInputStream("stdin", System.in, inputCharset));
         usingStdin = true;
       }
@@ -805,10 +821,10 @@ abstract class AbstractCommandLineRunner<A extends Compiler,
   protected int doRun() throws FlagUsageException, IOException {
     Compiler.setLoggingLevel(Level.parse(config.loggingLevel));
 
-    List<SourceFile> externs = createExterns();
-
     compiler = createCompiler();
     B options = createOptions();
+
+    List<SourceFile> externs = createExterns(options);
 
     List<JSModule> modules = null;
     Result result = null;
@@ -1070,8 +1086,8 @@ abstract class AbstractCommandLineRunner<A extends Compiler,
     return UTF_8;
   }
 
-  protected List<SourceFile> createExterns() throws FlagUsageException,
-      IOException {
+  protected List<SourceFile> createExterns(CompilerOptions options)
+      throws FlagUsageException, IOException {
     return isInTestMode() ? externsSupplierForTesting.get() :
         createExternInputs(config.externs);
   }
@@ -1998,16 +2014,6 @@ abstract class AbstractCommandLineRunner<A extends Compiler,
       return this;
     }
 
-    private boolean acceptConstKeyword = false;
-
-    /**
-     * Sets whether to accept usage of 'const' keyword.
-     */
-    CommandLineConfig setAcceptConstKeyword(boolean acceptConstKeyword) {
-      this.acceptConstKeyword = acceptConstKeyword;
-      return this;
-    }
-
     private String languageIn = "";
     private String languageOut = "";
 
@@ -2064,25 +2070,20 @@ abstract class AbstractCommandLineRunner<A extends Compiler,
       return this;
     }
 
-    private boolean transpileOnly = false;
+    private List<String> moduleRoots = ImmutableList.of(ES6ModuleLoader.DEFAULT_FILENAME_PREFIX);
 
     /**
-     * Sets whether to run up to ES6 transpilation only.
+     * Sets the CommonJS module path prefix (maps to {@link #setModuleRoots(List)}).
      */
-    CommandLineConfig setTranspileOnly(boolean transpileOnly) {
-      this.transpileOnly = transpileOnly;
-      return this;
+    CommandLineConfig setCommonJSModulePathPrefix(String prefix) {
+      return setModuleRoots(ImmutableList.of(prefix));
     }
 
-    private String commonJSModulePathPrefix =
-        ProcessCommonJSModules.DEFAULT_FILENAME_PREFIX;
-
     /**
-     * Sets the CommonJS module path prefix.
+     * Sets the module roots.
      */
-    CommandLineConfig setCommonJSModulePathPrefix(
-        String commonJSModulePathPrefix) {
-      this.commonJSModulePathPrefix = commonJSModulePathPrefix;
+    CommandLineConfig setModuleRoots(List<String> jsModuleRoots) {
+      this.moduleRoots = jsModuleRoots;
       return this;
     }
 

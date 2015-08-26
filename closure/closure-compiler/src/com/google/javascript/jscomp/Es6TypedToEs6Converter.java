@@ -18,12 +18,23 @@ package com.google.javascript.jscomp;
 import com.google.common.base.Preconditions;
 import com.google.javascript.jscomp.Es6ToEs3Converter.ClassDeclarationMetadata;
 import com.google.javascript.rhino.IR;
+import com.google.javascript.rhino.JSDocInfo;
+import com.google.javascript.rhino.JSDocInfo.Visibility;
+import com.google.javascript.rhino.JSDocInfoBuilder;
+import com.google.javascript.rhino.JSTypeExpression;
 import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Node.TypeDeclarationNode;
 import com.google.javascript.rhino.Token;
+import com.google.javascript.rhino.TypeDeclarationsIR;
+
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
 
 /**
- * Conversion pass that converts ES6 type syntax code to plain ES6, currently transpiles member
- * variables (aka fields).
+ * Converts {@link Node#getDeclaredTypeExpression()} to {@link JSDocInfo#getType()} type
+ * annotations. Types are marked as inline types.
  */
 public final class Es6TypedToEs6Converter implements NodeTraversal.Callback, HotSwapCompilerPass {
   static final DiagnosticType CANNOT_CONVERT_MEMBER_VARIABLES = DiagnosticType.error(
@@ -31,88 +42,655 @@ public final class Es6TypedToEs6Converter implements NodeTraversal.Callback, Hot
       "Can only convert class member variables (fields) in declarations or the right hand side of "
           + "a simple assignment.");
 
+  static final DiagnosticType CANNOT_CONVERT_BOUNDED_GENERICS = DiagnosticType.error(
+      "JSC_CANNOT_CONVERT_BOUNDED_GENERICS",
+      "Bounded generics are not yet implemented.");
+
+  static final DiagnosticType TYPE_ALIAS_ALREADY_DECLARED = DiagnosticType.error(
+      "JSC_TYPE_ALIAS_ALREADY_DECLARED",
+      "Type alias already declared as a variable: {0}");
+
+  static final DiagnosticType TYPE_QUERY_NOT_SUPPORTED = DiagnosticType.error(
+      "JSC_TYPE_QUERY_NOT_SUPPORTED",
+      "Type query is currently not supported.");
+
+  static final DiagnosticType UNSUPPORTED_RECORD_TYPE = DiagnosticType.error(
+      "JSC_UNSUPPORTED_RECORD_TYPE",
+      "Currently only member variables are supported in record types, please consider "
+          + "using interfaces instead.");
+
+  static final DiagnosticType COMPUTED_PROP_ACCESS_MODIFIER = DiagnosticType.error(
+      "JSC_UNSUPPORTED_ACCESS_MODIFIER",
+      "Accessibility is not checked on computed properties");
+
   private final AbstractCompiler compiler;
+  private final Map<Node, Namespace> nodeNamespaceMap;
+  private final Set<String> convertedNamespaces;
+  private Namespace currNamespace;
 
   Es6TypedToEs6Converter(AbstractCompiler compiler) {
     this.compiler = compiler;
+    this.nodeNamespaceMap = new HashMap<>();
+    this.convertedNamespaces = new HashSet<>();
   }
 
   @Override
-  public void process(Node externs, Node root) {
-    NodeTraversal.traverse(compiler, root, this);
+  public void process(Node externs, Node scriptRoot) {
+    ScanNamespaces scanner = new ScanNamespaces();
+    NodeTraversal.traverseEs6(compiler, externs, scanner);
+    NodeTraversal.traverseEs6(compiler, scriptRoot, scanner);
+    NodeTraversal.traverseEs6(compiler, externs, this);
+    NodeTraversal.traverseEs6(compiler, scriptRoot, this);
   }
 
   @Override
   public void hotSwapScript(Node scriptRoot, Node originalRoot) {
-    NodeTraversal.traverse(compiler, scriptRoot, this);
+    ScanNamespaces scanner = new ScanNamespaces();
+    NodeTraversal.traverseEs6(compiler, scriptRoot, scanner);
+    NodeTraversal.traverseEs6(compiler, scriptRoot, this);
   }
 
   @Override
-  public boolean shouldTraverse(NodeTraversal nodeTraversal, Node n, Node parent) {
+  public boolean shouldTraverse(NodeTraversal t, Node n, Node parent) {
+    if (n.getType() == Token.NAMESPACE) {
+      currNamespace = nodeNamespaceMap.get(n);
+    }
     return true;
   }
 
   @Override
   public void visit(NodeTraversal t, Node n, Node parent) {
-    if (n.getType() != Token.CLASS) {
-      return;
-    }
-    Node classNode = n;
-
-    Node classMembers = classNode.getLastChild();
-    // Find the constructor, see if it has member variables.
-    Node constructor = null;
-    boolean hasMemberVariable = false;
-    for (Node member : classMembers.children()) {
-      if (member.isMemberFunctionDef() && member.getString().equals("constructor")) {
-        constructor = member.getFirstChild();
-      } else {
-        hasMemberVariable |=
-            member.isMemberVariableDef()
-                || (member.isComputedProp() && member.getBooleanProp(Node.COMPUTED_PROP_VARIABLE));
-      }
-      if (constructor != null && hasMemberVariable) {
+    switch (n.getType()) {
+      case Token.CLASS:
+        visitClass(n, parent);
         break;
+      case Token.INTERFACE:
+        visitInterface(n, parent);
+        break;
+      case Token.ENUM:
+        visitEnum(n, parent);
+        break;
+      case Token.NAME:
+      case Token.REST:
+        maybeVisitColonType(n, n);
+        break;
+      case Token.FUNCTION:
+        visitFunction(n, parent);
+        break;
+      case Token.TYPE_ALIAS:
+        visitTypeAlias(t, n, parent);
+        break;
+      case Token.DECLARE:
+        visitAmbientDeclaration(n);
+        break;
+      case Token.NAMESPACE:
+        visitNamespaceDeclaration(n, parent);
+        break;
+      case Token.VAR:
+      case Token.LET:
+      case Token.CONST:
+        visitVarInsideNamespace(n, parent);
+        break;
+      default:
+    }
+  }
+
+  private void visitNamespaceDeclaration(Node n, Node parent) {
+    popNamespace(n, parent);
+    for (Node name = NodeUtil.getRootOfQualifiedName(n.getFirstChild()); name != n;
+        name = name.getParent()) {
+      String fullName = maybePrependCurrNamespace(name.getQualifiedName());
+      if (!convertedNamespaces.contains(fullName)) {
+        JSDocInfoBuilder doc = JSDocInfoBuilder.maybeCopyFrom(n.getJSDocInfo());
+        doc.recordConstancy();
+        Node namespaceDec = NodeUtil.newQNameDeclaration(
+            compiler, fullName, IR.objectlit(), doc.build()).useSourceInfoFromForTree(n);
+        parent.addChildBefore(namespaceDec, n);
+        convertedNamespaces.add(fullName);
       }
     }
 
-    if (!hasMemberVariable) {
-      return;
+    Node insertPoint = n;
+    for (Node child : n.getLastChild().children()) {
+      Node detached = child.detachFromParent();
+      parent.addChildAfter(detached, insertPoint);
+      insertPoint = detached;
     }
 
-    Preconditions.checkNotNull(constructor, "Constructor should be added by Es6ConvertSuper");
+    parent.removeChild(n);
+    compiler.reportCodeChange();
+  }
 
+  private void maybeAddGenerics(Node n, Node jsDocNode) {
+    Node name = n.getFirstChild();
+    Node generics = (Node) name.getProp(Node.GENERIC_TYPE_LIST);
+    if (generics != null) {
+      JSDocInfoBuilder doc = JSDocInfoBuilder.maybeCopyFrom(jsDocNode.getJSDocInfo());
+      // Discard the type bound (the "extends" part) for now
+      for (Node typeName : generics.children()) {
+        doc.recordTemplateTypeName(typeName.getString());
+        if (typeName.hasChildren()) {
+          compiler.report(JSError.make(name, CANNOT_CONVERT_BOUNDED_GENERICS));
+          return;
+        }
+      }
+      name.removeProp(Node.GENERIC_TYPE_LIST);
+      jsDocNode.setJSDocInfo(doc.build());
+    }
+  }
+
+  private void visitClass(Node n, Node parent) {
+    maybeAddGenerics(n, n);
+    JSDocInfoBuilder doc = JSDocInfoBuilder.maybeCopyFrom(n.getJSDocInfo());
+    Node interfaces = (Node) n.getProp(Node.IMPLEMENTS);
+    if (interfaces != null) {
+      for (Node child : interfaces.children()) {
+        Node type = convertWithLocation(child);
+        doc.recordImplementedInterface(new JSTypeExpression(type, n.getSourceFileName()));
+      }
+      n.removeProp(Node.IMPLEMENTS);
+    }
+
+    Node superType = n.getChildAtIndex(1);
+    Node newSuperType = maybeGetQualifiedNameNode(superType);
+    if (newSuperType != superType) {
+      n.replaceChild(superType, newSuperType);
+    }
+
+    Node classMembers = n.getLastChild();
     ClassDeclarationMetadata metadata = ClassDeclarationMetadata.create(n, parent);
-    if (metadata == null) {
-      compiler.report(JSError.make(n, CANNOT_CONVERT_MEMBER_VARIABLES));
-      return;
-    }
 
-    Node classNameAccess = NodeUtil.newQName(compiler, metadata.fullClassName);
-    Node memberVarInsertionPoint = null;  // To insert up front initially
     for (Node member : classMembers.children()) {
-      // Functions are handled by the regular Es6ToEs3Converter
-      if (!member.isMemberVariableDef() && !member.getBooleanProp(Node.COMPUTED_PROP_VARIABLE)) {
+      if (member.isIndexSignature()) {
+        doc.recordImplementedInterface(createIObject(member));
         continue;
       }
-      compiler.reportCodeChange();
-      member.getParent().removeChild(member);
 
-      Node qualifiedMemberAccess =
-          Es6ToEs3Converter.getQualifiedMemberAccess(compiler, member, classNameAccess,
-              IR.thisNode());
-      // Copy type information.
-      qualifiedMemberAccess.setJSDocInfo(member.getJSDocInfo());
-      Node newNode = NodeUtil.newExpr(qualifiedMemberAccess);
-      newNode.useSourceInfoIfMissingFromForTree(member);
-      if (member.isStaticMember()) {
-        // Static fields are transpiled on the ctor function.
-        metadata.insertStaticMember(newNode);
-      } else {
-        // Instance fields are transpiled to statements inside the ctor function.
-        constructor.getLastChild().addChildAfter(newNode, memberVarInsertionPoint);
-        memberVarInsertionPoint = newNode;
+      // Functions are handled by the regular Es6ToEs3Converter
+      if (!member.isMemberVariableDef() && !member.getBooleanProp(Node.COMPUTED_PROP_VARIABLE)) {
+        maybeAddVisibility(member);
+        continue;
       }
+
+      if (metadata == null) {
+        compiler.report(JSError.make(n, CANNOT_CONVERT_MEMBER_VARIABLES));
+        return;
+      }
+
+      metadata.insertNodeAndAdvance(createPropertyDefinition(member, metadata.fullClassName));
+      compiler.reportCodeChange();
+    }
+
+    n.setJSDocInfo(doc.build());
+    maybeCreateQualifiedDeclaration(n, parent);
+  }
+
+  private void visitInterface(Node n, Node parent) {
+    maybeAddGenerics(n, n);
+    Node name = n.getFirstChild();
+    Node superTypes = name.getNext();
+    JSDocInfoBuilder doc = JSDocInfoBuilder.maybeCopyFrom(n.getJSDocInfo());
+    doc.recordInterface();
+    if (!superTypes.isEmpty()) {
+      for (Node child : superTypes.children()) {
+        Node type = convertWithLocation(child);
+        doc.recordExtendedInterface(new JSTypeExpression(type, n.getSourceFileName()));
+      }
+    }
+
+    Node insertionPoint = n;
+    Node members = n.getLastChild();
+    for (Node member : members.children()) {
+      // Synthesize a block for method signatures.
+      if (member.isMemberFunctionDef()) {
+        Node function = member.getFirstChild();
+        function.getLastChild().setType(Token.BLOCK);
+        continue;
+      }
+      if (member.isIndexSignature()) {
+        doc.recordExtendedInterface(createIObject(member));
+        continue;
+      }
+      Node newNode = createPropertyDefinition(member, name.getString());
+      insertionPoint.getParent().addChildAfter(newNode, insertionPoint);
+      insertionPoint = newNode;
+    }
+    n.setJSDocInfo(doc.build());
+
+    // Convert interface to class
+    n.setType(Token.CLASS);
+    Node empty = new Node(Token.EMPTY).useSourceInfoIfMissingFrom(n);
+    n.replaceChild(superTypes, empty);
+    members.setType(Token.CLASS_MEMBERS);
+
+    maybeCreateQualifiedDeclaration(n, parent);
+    compiler.reportCodeChange();
+  }
+
+  private JSTypeExpression createIObject(Node indexSignature) {
+    Node indexType = convertWithLocation(indexSignature.getFirstChild()
+        .getDeclaredTypeExpression());
+    Node declaredType = convertWithLocation(indexSignature.getDeclaredTypeExpression());
+    Node block = new Node(Token.BLOCK, indexType, declaredType);
+    Node iObject = IR.string("IObject");
+    iObject.addChildrenToFront(block);
+    JSTypeExpression bang = new JSTypeExpression(new Node(Token.BANG, iObject)
+        .useSourceInfoIfMissingFromForTree(indexSignature), indexSignature.getSourceFileName());
+    indexSignature.detachFromParent();
+    compiler.reportCodeChange();
+    return bang;
+  }
+
+  private Node createPropertyDefinition(Node member, String name) {
+    member.detachFromParent();
+    Node nameAccess = NodeUtil.newQName(compiler, name);
+    Node prototypeAcess = NodeUtil.newPropertyAccess(compiler, nameAccess, "prototype");
+    Node qualifiedMemberAccess =
+        Es6ToEs3Converter.getQualifiedMemberAccess(compiler, member, nameAccess,
+            prototypeAcess);
+    // Copy type information.
+    maybeVisitColonType(member, member);
+    maybeAddVisibility(member);
+
+    qualifiedMemberAccess.setJSDocInfo(member.getJSDocInfo());
+    Node newNode = NodeUtil.newExpr(qualifiedMemberAccess);
+    return newNode.useSourceInfoIfMissingFromForTree(member);
+  }
+
+  private void visitEnum(Node n, Node parent) {
+    Node name = n.getFirstChild();
+    Node members = n.getLastChild();
+    double nextValue = 0;
+    Node[] stringKeys = new Node[members.getChildCount()];
+    for (int i = 0; i < members.getChildCount(); i++) {
+      Node child = members.getChildAtIndex(i);
+      if (child.hasChildren()) {
+        nextValue = child.getFirstChild().getDouble() + 1;
+      } else {
+        child.addChildToFront(IR.number(nextValue++));
+      }
+      stringKeys[i] = child;
+    }
+    for (Node child : stringKeys) {
+      child.detachFromParent();
+    }
+
+    String oldName = name.getString();
+    String qName = maybePrependCurrNamespace(oldName);
+    JSDocInfoBuilder builder = JSDocInfoBuilder.maybeCopyFrom(n.getJSDocInfo());
+    builder.recordEnumParameterType(
+        new JSTypeExpression(IR.string("number"), n.getSourceFileName()));
+    Node newDec = NodeUtil.newQNameDeclaration(
+        compiler,
+        qName,
+        IR.objectlit(stringKeys),
+        builder.build()).useSourceInfoFromForTree(n);
+    n.setJSDocInfo(null);
+    parent.replaceChild(n, newDec);
+    compiler.reportCodeChange();
+  }
+
+  private void visitFunction(Node n, Node parent) {
+    // For member functions (eg. class Foo<T> { f() {} }), the JSDocInfo
+    // needs to go on the synthetic MEMBER_FUNCTION_DEF node.
+    Node jsDocNode = parent.getType() == Token.MEMBER_FUNCTION_DEF
+        ? parent
+        : n;
+    maybeAddGenerics(n, jsDocNode);
+    maybeVisitColonType(n, jsDocNode); // Return types are colon types on the function node
+    if (n.getLastChild().isEmpty()) {
+      n.replaceChild(n.getLastChild(), IR.block().useSourceInfoFrom(n));
+    }
+    maybeCreateQualifiedDeclaration(n, parent);
+  }
+
+  private void maybeAddVisibility(Node n) {
+    Visibility access = (Visibility) n.getProp(Node.ACCESS_MODIFIER);
+    if (access != null) {
+      if (n.isComputedProp()) {
+        compiler.report(JSError.make(n, COMPUTED_PROP_ACCESS_MODIFIER));
+      }
+      JSDocInfoBuilder memberDoc = JSDocInfoBuilder.maybeCopyFrom(n.getJSDocInfo());
+      memberDoc.recordVisibility(access);
+      n.setJSDocInfo(memberDoc.build());
+      n.removeProp(Node.ACCESS_MODIFIER);
+    }
+  }
+
+  private void maybeVisitColonType(Node n, Node jsDocNode) {
+    Node type = n.getDeclaredTypeExpression();
+    boolean hasColonType = type != null;
+    if (n.isRest() && hasColonType) {
+      type = new Node(Token.ELLIPSIS, convertWithLocation(type.removeFirstChild()));
+    } else {
+      type = maybeProcessOptionalParameter(n, type);
+    }
+    if (type == null) {
+      return;
+    }
+
+    JSDocInfo info = jsDocNode.getJSDocInfo();
+    JSDocInfoBuilder builder = JSDocInfoBuilder.maybeCopyFrom(info);
+
+    JSTypeExpression typeExpression = new JSTypeExpression(type, n.getSourceFileName());
+    switch (n.getType()) {
+      case Token.FUNCTION:
+        builder.recordReturnType(typeExpression);
+        break;
+      case Token.MEMBER_VARIABLE_DEF:
+        builder.recordType(typeExpression);
+        break;
+      default:
+        builder.recordType(typeExpression);
+        builder.recordInlineType();
+    }
+
+    info = builder.build();
+    jsDocNode.setJSDocInfo(info);
+
+    if (hasColonType) {
+      n.setDeclaredTypeExpression(null);
+      compiler.reportCodeChange();
+    }
+  }
+
+  private void visitTypeAlias(NodeTraversal t, Node n, Node parent) {
+    String alias = n.getString();
+    if (t.getScope().isDeclared(alias, true)) {
+      compiler.report(
+          JSError.make(n, TYPE_ALIAS_ALREADY_DECLARED, alias));
+    }
+    JSDocInfoBuilder builder = JSDocInfoBuilder.maybeCopyFrom(n.getJSDocInfo());
+    builder.recordTypedef(new JSTypeExpression(
+        convertWithLocation(n.getFirstChild()), n.getSourceFileName()));
+
+    Node newName =
+        maybeGetQualifiedNameNode(IR.name(n.getString())).useSourceInfoIfMissingFromForTree(n);
+    Node newDec1 = NodeUtil.newQNameDeclaration(
+        compiler,
+        newName.getQualifiedName(),
+        null,
+        builder.build()).useSourceInfoFromForTree(n);
+    parent.replaceChild(n, newDec1);
+    compiler.reportCodeChange();
+  }
+
+  private void visitAmbientDeclaration(Node n) {
+    Node child = n.getFirstChild();
+    JSDocInfoBuilder builder = JSDocInfoBuilder.maybeCopyFrom(child.getJSDocInfo());
+    if (child.getType() == Token.CONST) {
+      builder.recordConstancy();
+      child.setType(Token.VAR);
+    }
+    child.setJSDocInfo(builder.build());
+
+    n.detachFromParent();
+    // The node can have multiple children if transformed from an ambient namespace declaration.
+    for (Node c : n.children()) {
+      compiler.getSynthesizedExternsInput().getAstRoot(compiler)
+          .addChildToBack(c.detachFromParent());
+    }
+    compiler.reportCodeChange();
+  }
+
+  private void visitVarInsideNamespace(Node n, Node parent) {
+    if (currNamespace != null) {
+      Node insertPoint = n;
+      for (Node child : n.children()) {
+        Node name = child;
+        String oldName = name.getString();
+        String qName = maybePrependCurrNamespace(oldName);
+        JSDocInfoBuilder builder = JSDocInfoBuilder.maybeCopyFrom(child.getJSDocInfo());
+        if (n.isConst()) {
+          builder.recordConstancy();
+        }
+
+        Node newDec = NodeUtil.newQNameDeclaration(
+            compiler,
+            qName,
+            child.removeFirstChild(),
+            builder.build()).useSourceInfoFromForTree(n);
+        parent.addChildAfter(newDec, insertPoint);
+        insertPoint = newDec;
+      }
+
+      n.detachFromParent();
+      compiler.reportCodeChange();
+    }
+  }
+
+  private Node maybeCreateAnyType(Node n, Node type) {
+    return type == null ? TypeDeclarationsIR.anyType().useSourceInfoIfMissingFrom(n) : type;
+  }
+
+  private Node maybeProcessOptionalParameter(Node n, Node type) {
+    if (n.getBooleanProp(Node.OPT_ES6_TYPED)) {
+      n.putBooleanProp(Node.OPT_ES6_TYPED, false);
+      type = maybeCreateAnyType(n, type);
+      return new Node(Token.EQUALS, convertWithLocation(type));
+    } else {
+      return type == null ? null : convertWithLocation(type);
+    }
+  }
+
+  private Node convertWithLocation(Node type) {
+    return convertDeclaredTypeToJSDoc(type).useSourceInfoIfMissingFrom(type);
+  }
+
+  private Node convertDeclaredTypeToJSDoc(Node type) {
+    Preconditions.checkArgument(type instanceof TypeDeclarationNode);
+    switch (type.getType()) {
+      // "Primitive" types.
+      case Token.STRING_TYPE:
+        return IR.string("string");
+      case Token.BOOLEAN_TYPE:
+        return IR.string("boolean");
+      case Token.NUMBER_TYPE:
+        return IR.string("number");
+      case Token.VOID_TYPE:
+        return IR.string("void");
+      case Token.ANY_TYPE:
+        return new Node(Token.QMARK);
+        // Named types.
+      case Token.NAMED_TYPE:
+        return convertNamedType(type);
+      case Token.ARRAY_TYPE: {
+        Node arrayType = IR.string("Array");
+        Node memberType = convertWithLocation(type.getFirstChild());
+        arrayType.addChildToFront(
+            new Node(Token.BLOCK, memberType).useSourceInfoIfMissingFrom(type));
+        return new Node(Token.BANG, arrayType);
+      }
+      case Token.PARAMETERIZED_TYPE: {
+        Node namedType = type.getFirstChild();
+        Node result = convertWithLocation(namedType);
+        Node typeParameterTarget =
+            result.getType() == Token.BANG ? result.getFirstChild() : result;
+        Node parameters = IR.block().useSourceInfoIfMissingFrom(type);
+        typeParameterTarget.addChildToFront(parameters);
+        for (Node param = namedType.getNext(); param != null; param = param.getNext()) {
+          parameters.addChildToBack(convertWithLocation(param));
+        }
+        return result;
+      }
+      // Composite types.
+      case Token.FUNCTION_TYPE:
+        Node returnType = type.getFirstChild();
+        Node paramList = new Node(Token.PARAM_LIST);
+        for (Node param = returnType.getNext(); param != null; param = param.getNext()) {
+          Node paramType = param.getDeclaredTypeExpression();
+          if (param.isRest()) {
+            if (paramType == null) {
+              paramType = new Node(Token.ELLIPSIS, new Node(Token.QMARK));
+            } else {
+              paramType = new Node(Token.ELLIPSIS,
+                  convertWithLocation(paramType.getFirstChild()));
+            }
+          } else {
+            paramType = maybeProcessOptionalParameter(param,
+                maybeCreateAnyType(param, paramType));
+          }
+          paramList.addChildToBack(paramType);
+        }
+        Node function = new Node(Token.FUNCTION);
+        function.addChildToBack(paramList);
+        function.addChildToBack(convertWithLocation(returnType));
+        return function;
+      case Token.UNION_TYPE:
+        Node pipe = new Node(Token.PIPE);
+        for (Node child : type.children()) {
+          pipe.addChildToBack(convertWithLocation(child));
+        }
+        return pipe;
+      case Token.RECORD_TYPE:
+        Node lb = new Node(Token.LB);
+        for (Node memberVar : type.children()) {
+          if (!memberVar.isMemberVariableDef()) {
+            compiler.report(JSError.make(type, UNSUPPORTED_RECORD_TYPE));
+            continue;
+          }
+          Node colon = new Node(Token.COLON);
+          memberVar.setType(Token.STRING_KEY);
+          Node memberType = convertWithLocation(
+              maybeCreateAnyType(memberVar, memberVar.getDeclaredTypeExpression()));
+          memberVar.setDeclaredTypeExpression(null);
+          colon.addChildToBack(memberVar.detachFromParent());
+          colon.addChildToBack(memberType);
+          lb.addChildrenToBack(colon);
+        }
+        return new Node(Token.LC, lb);
+      case Token.TYPEOF:
+        // Currently, TypeQuery is not supported in Closure's type system.
+        compiler.report(JSError.make(type, TYPE_QUERY_NOT_SUPPORTED));
+        return new Node(Token.QMARK);
+      default:
+        // TODO(moz): Implement.
+        break;
+    }
+    throw new IllegalArgumentException(
+        "Unexpected node type for type conversion: " + type.getType());
+  }
+
+  private Node convertNamedType(Node type) {
+    Node oldNameNode = type.getFirstChild();
+    Node newNameNode = maybeGetQualifiedNameNode(oldNameNode);
+    if (newNameNode != oldNameNode) {
+      type.replaceChild(oldNameNode, newNameNode);
+    }
+
+    Node propTree = type.getFirstChild();
+    String dotted = propTree.getQualifiedName();
+    // In the native type syntax, nominal types are non-nullable by default.
+    // NOTE(dimvar): This adds ! in front of type variables as well.
+    // Minor issue, not worth fixing for now.
+    // To fix, we must first transpile declarations of generic types, collect
+    // the type variables in scope, and use them during transpilation.
+    return new Node(Token.BANG, IR.string(dotted));
+  }
+
+  private void maybeCreateQualifiedDeclaration(Node n, Node parent) {
+    if (currNamespace != null) {
+      Node name = n.getFirstChild();
+      String oldName = name.getString();
+      String qName = maybePrependCurrNamespace(oldName);
+      Node newName = n.isFunction() ? IR.name("") : IR.empty();
+      newName.useSourceInfoFrom(n);
+      n.replaceChild(name, newName);
+
+      Node placeHolder = IR.empty();
+      parent.replaceChild(n, placeHolder);
+      Node newDec = NodeUtil.newQNameDeclaration(
+          compiler,
+          qName,
+          n,
+          n.getJSDocInfo()).useSourceInfoFromForTree(n);
+      n.setJSDocInfo(null);
+      parent.replaceChild(placeHolder, newDec);
+      compiler.reportCodeChange();
+    }
+  }
+
+  private Node maybeGetQualifiedNameNode(Node oldNameNode) {
+    if (oldNameNode.isName()) {
+      String oldName = oldNameNode.getString();
+      for (Namespace definitionNamespace = currNamespace; definitionNamespace != null;
+          definitionNamespace = definitionNamespace.parent) {
+        if (definitionNamespace.typeNames.contains(oldName)) {
+          return NodeUtil.newQName(compiler, definitionNamespace.name + "." + oldName)
+              .useSourceInfoFromForTree(oldNameNode);
+        }
+      }
+    }
+    return oldNameNode;
+  }
+
+  private String maybePrependCurrNamespace(String oldName) {
+    return currNamespace == null ? oldName : currNamespace.name + "." + oldName;
+  }
+
+  private void popNamespace(Node n, Node parent) {
+    if (n.getType() == Token.NAMESPACE) {
+      currNamespace = nodeNamespaceMap.get(
+          parent.getType() == Token.DECLARE ? parent.getParent().getParent() : parent.getParent());
+    }
+  }
+
+  private class ScanNamespaces implements NodeTraversal.Callback {
+    private Map<String, Namespace> namespaces = new HashMap<>();
+
+    @Override
+    public boolean shouldTraverse(NodeTraversal t, Node n, Node parent) {
+      switch (n.getType()) {
+        case Token.SCRIPT:
+        case Token.NAMESPACE_ELEMENTS:
+          return true;
+        case Token.BLOCK:
+          return n.getFirstChild() != null && n.getFirstChild().isScript();
+        case Token.DECLARE:
+          return n.getFirstChild().getType() == Token.NAMESPACE;
+        case Token.NAMESPACE:
+          String[] segments = n.getFirstChild().getQualifiedName().split("\\.");
+          for (String s : segments) {
+            String currName = maybePrependCurrNamespace(s);
+            if (!namespaces.containsKey(currName)) {
+              currNamespace = new Namespace(currName, currNamespace);
+              namespaces.put(currName, currNamespace);
+            }
+            currNamespace = namespaces.get(currName);
+          }
+          nodeNamespaceMap.put(n, currNamespace);
+          return true;
+        case Token.CLASS:
+        case Token.INTERFACE:
+        case Token.ENUM:
+          if (currNamespace != null) {
+            currNamespace.typeNames.add(n.getFirstChild().getString());
+          }
+          return true;
+        case Token.TYPE_ALIAS:
+          if (currNamespace != null) {
+            currNamespace.typeNames.add(n.getString());
+          }
+          return true;
+      }
+      return false;
+    }
+
+    @Override
+    public void visit(NodeTraversal t, Node n, Node parent) {
+      popNamespace(n, parent);
+    }
+  }
+
+  private static class Namespace {
+    private final String name;
+    private Set<String> typeNames;
+    private Namespace parent;
+
+    private Namespace(String name, Namespace parent) {
+      this.name = name;
+      this.parent = parent;
+      this.typeNames = new HashSet<>();
     }
   }
 }

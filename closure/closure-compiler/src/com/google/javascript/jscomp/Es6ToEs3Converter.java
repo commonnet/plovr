@@ -33,7 +33,13 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Converts ES6 code to valid ES3 code.
+ * Converts ES6 code to valid ES5 code. This class does most of the transpilation, and
+ * https://github.com/google/closure-compiler/wiki/ECMAScript6 lists which ES6 features are
+ * supported. Other classes that start with "Es6" do other parts of the transpilation.
+ *
+ * <p>In most cases, the output is valid as ES3 (hence the class name) but in some cases, if
+ * the output language is set to ES5, we rely on ES5 features such as getters, setters,
+ * and Object.defineProperties.
  *
  * @author tbreisacher@google.com (Tyler Breisacher)
  */
@@ -44,10 +50,11 @@ public final class Es6ToEs3Converter implements NodeTraversal.Callback, HotSwapC
       "JSC_CANNOT_CONVERT",
       "This code cannot be converted from ES6. {0}");
 
-  // TODO(tbreisacher): Remove this once all ES6 features are transpilable.
+  // TODO(tbreisacher): Remove this once we have implemented transpilation for all the features
+  // we intend to support.
   static final DiagnosticType CANNOT_CONVERT_YET = DiagnosticType.error(
       "JSC_CANNOT_CONVERT_YET",
-      "ES6-to-ES3 conversion of ''{0}'' is not yet implemented.");
+      "ES6 transpilation of ''{0}'' is not yet implemented.");
 
   static final DiagnosticType DYNAMIC_EXTENDS_TYPE = DiagnosticType.error(
       "JSC_DYNAMIC_EXTENDS_TYPE",
@@ -61,16 +68,17 @@ public final class Es6ToEs3Converter implements NodeTraversal.Callback, HotSwapC
       "CONFLICTING_GETTER_SETTER_TYPE",
       "The types of the getter and setter for property ''{0}'' do not match.");
 
-  // The name of the vars that capture 'this' and 'arguments'
-  // for converting arrow functions.
-  private static final String THIS_VAR = "$jscomp$this";
-  private static final String ARGUMENTS_VAR = "$jscomp$arguments";
+  static final DiagnosticType BAD_REST_PARAMETER_ANNOTATION = DiagnosticType.warning(
+      "BAD_REST_PARAMETER_ANNOTATION",
+      "Missing \"...\" in type annotation for rest parameter.");
+
+  // The name of the index variable for populating the rest parameter array.
+  private static final String REST_INDEX = "$jscomp$restIndex";
+
+  // The name of the placeholder for the rest parameters.
+  private static final String REST_PARAMS = "$jscomp$restParams";
 
   private static final String FRESH_SPREAD_VAR = "$jscomp$spread$args";
-
-  private static final String DESTRUCTURING_TEMP_VAR = "$jscomp$destructuring$var";
-
-  private int destructuringVarCounter = 0;
 
   private static final String FRESH_COMP_PROP_VAR = "$jscomp$compprop";
 
@@ -79,8 +87,7 @@ public final class Es6ToEs3Converter implements NodeTraversal.Callback, HotSwapC
   private static final String ITER_RESULT = "$jscomp$key$";
 
   // These functions are defined in js/es6_runtime.js
-  public static final String COPY_PROP = "$jscomp.copyProperties";
-  private static final String INHERITS = "$jscomp.inherits";
+  static final String INHERITS = "$jscomp.inherits";
   static final String MAKE_ITER = "$jscomp.makeIterator";
 
   public Es6ToEs3Converter(AbstractCompiler compiler) {
@@ -89,29 +96,25 @@ public final class Es6ToEs3Converter implements NodeTraversal.Callback, HotSwapC
 
   @Override
   public void process(Node externs, Node root) {
-    NodeTraversal.traverse(compiler, root, this);
+    NodeTraversal.traverseEs6(compiler, externs, this);
+    NodeTraversal.traverseEs6(compiler, root, this);
   }
 
   @Override
   public void hotSwapScript(Node scriptRoot, Node originalRoot) {
-    NodeTraversal.traverse(compiler, scriptRoot, this);
+    NodeTraversal.traverseEs6(compiler, scriptRoot, this);
   }
 
   /**
-   * Some nodes (such as arrow functions) must be visited pre-order in order to rewrite the
+   * Some nodes must be visited pre-order in order to rewrite the
    * references to {@code this} correctly.
    * Everything else is translated post-order in {@link #visit}.
    */
   @Override
   public boolean shouldTraverse(NodeTraversal t, Node n, Node parent) {
     switch (n.getType()) {
-      case Token.FUNCTION:
-        if (n.isArrowFunction()) {
-          visitArrowFunction(t, n);
-        }
-        break;
-      case Token.PARAM_LIST:
-        visitParamList(n, parent);
+      case Token.REST:
+        visitRestParam(n, parent);
         break;
       case Token.GETTER_DEF:
       case Token.SETTER_DEF:
@@ -168,234 +171,14 @@ public final class Es6ToEs3Converter implements NodeTraversal.Callback, HotSwapC
           }
         }
         break;
+      case Token.TAGGED_TEMPLATELIT:
+        Es6TemplateLiterals.visitTaggedTemplateLiteral(t, n);
+        break;
       case Token.TEMPLATELIT:
-        Es6TemplateLiterals.visitTemplateLiteral(t, n);
-        break;
-      case Token.ARRAY_PATTERN:
-        visitArrayPattern(t, n, parent);
-        break;
-      case Token.OBJECT_PATTERN:
-        visitObjectPattern(t, n, parent);
-        break;
-    }
-  }
-
-  private void visitObjectPattern(NodeTraversal t, Node objectPattern, Node parent) {
-    Node rhs, nodeToDetach;
-    if (NodeUtil.isNameDeclaration(parent) && !NodeUtil.isEnhancedFor(parent.getParent())) {
-      rhs = objectPattern.getLastChild();
-      nodeToDetach = parent;
-    } else if (parent.isAssign() && parent.getParent().isExprResult()) {
-      rhs = parent.getLastChild();
-      nodeToDetach = parent.getParent();
-    } else if (parent.isStringKey() || parent.isArrayPattern()
-        || parent.isDefaultValue()) {
-      // Nested object pattern; do nothing. We will visit it after rewriting the parent.
-      return;
-    } else if (NodeUtil.isEnhancedFor(parent) || NodeUtil.isEnhancedFor(parent.getParent())) {
-      visitDestructuringPatternInEnhancedFor(objectPattern);
-      return;
-    } else if (parent.isCatch()) {
-      visitDestructuringPatternInCatch(objectPattern);
-      return;
-    } else {
-      throw new IllegalStateException("Unexpected OBJECT_PATTERN parent: " + parent);
-    }
-
-    // Convert 'var {a: b, c: d} = rhs' to:
-    // var temp = rhs;
-    // var b = temp.a;
-    // var d = temp.c;
-    String tempVarName = DESTRUCTURING_TEMP_VAR + (destructuringVarCounter++);
-    Node tempDecl = IR.var(IR.name(tempVarName), rhs.detachFromParent())
-        .useSourceInfoIfMissingFromForTree(objectPattern);
-    nodeToDetach.getParent().addChildBefore(tempDecl, nodeToDetach);
-
-    for (Node child = objectPattern.getFirstChild(), next;
-        child != null;
-        child = next) {
-      next = child.getNext();
-
-      Node newLHS, newRHS;
-      if (child.isStringKey()) {
-        Preconditions.checkState(child.hasChildren());
-        Node getprop = new Node(child.isQuotedString() ? Token.GETELEM : Token.GETPROP,
-                                IR.name(tempVarName),
-                                IR.string(child.getString()));
-
-        Node value = child.removeFirstChild();
-        if (!value.isDefaultValue()) {
-          newLHS = value;
-          newRHS = getprop;
-        } else {
-          newLHS = value.removeFirstChild();
-          Node defaultValue = value.removeFirstChild();
-          newRHS = defaultValueHook(getprop, defaultValue);
+        if (!parent.isTaggedTemplateLit()) {
+          Es6TemplateLiterals.visitTemplateLiteral(t, n);
         }
-      } else if (child.isComputedProp()) {
-        if (child.getLastChild().isDefaultValue()) {
-          newLHS = child.getLastChild().removeFirstChild();
-          Node getelem = IR.getelem(
-              IR.name(tempVarName),
-              child.removeFirstChild());
-
-          String intermediateTempVarName = DESTRUCTURING_TEMP_VAR + (destructuringVarCounter++);
-          Node intermediateDecl = IR.var(IR.name(intermediateTempVarName), getelem);
-          intermediateDecl.useSourceInfoIfMissingFromForTree(child);
-          nodeToDetach.getParent().addChildBefore(intermediateDecl, nodeToDetach);
-
-          newRHS = defaultValueHook(
-              IR.name(intermediateTempVarName),
-              child.getLastChild().removeFirstChild());
-        } else {
-          newRHS = IR.getelem(IR.name(tempVarName), child.removeFirstChild());
-          newLHS = child.removeFirstChild();
-        }
-      } else if (child.isDefaultValue()) {
-        newLHS = child.removeFirstChild();
-        Node defaultValue = child.removeFirstChild();
-        Node getprop = IR.getprop(IR.name(tempVarName), IR.string(newLHS.getString()));
-        newRHS = defaultValueHook(getprop, defaultValue);
-      } else {
-        throw new IllegalStateException("Unexpected OBJECT_PATTERN child: " + child);
-      }
-
-      Node newNode;
-      if (NodeUtil.isNameDeclaration(parent)) {
-        newNode = IR.declaration(newLHS, newRHS, parent.getType());
-      } else if (parent.isAssign()) {
-        newNode = IR.exprResult(IR.assign(newLHS, newRHS));
-      } else {
-        throw new IllegalStateException("not reached");
-      }
-      newNode.useSourceInfoIfMissingFromForTree(child);
-
-      nodeToDetach.getParent().addChildBefore(newNode, nodeToDetach);
-
-      // Explicitly visit the LHS of the new node since it may be a nested
-      // destructuring pattern.
-      visit(t, newLHS, newLHS.getParent());
-    }
-
-    nodeToDetach.detachFromParent();
-    compiler.reportCodeChange();
-  }
-
-  private void visitArrayPattern(NodeTraversal t, Node arrayPattern, Node parent) {
-    Node rhs, nodeToDetach;
-    if (NodeUtil.isNameDeclaration(parent) && !NodeUtil.isEnhancedFor(parent.getParent())) {
-      // The array pattern is the only child, because Es6SplitVariableDeclarations
-      // has already run.
-      Preconditions.checkState(arrayPattern.getNext() == null);
-      rhs = arrayPattern.getLastChild();
-      nodeToDetach = parent;
-    } else if (parent.isAssign()) {
-      rhs = arrayPattern.getNext();
-      nodeToDetach = parent.getParent();
-      Preconditions.checkState(nodeToDetach.isExprResult());
-    } else if (parent.isArrayPattern() || parent.isDefaultValue()
-        || parent.isStringKey()) {
-      // This is a nested array pattern. Don't do anything now; we'll visit it
-      // after visiting the parent.
-      return;
-    } else if (NodeUtil.isEnhancedFor(parent) || NodeUtil.isEnhancedFor(parent.getParent())) {
-      visitDestructuringPatternInEnhancedFor(arrayPattern);
-      return;
-    } else if (parent.isCatch()) {
-      visitDestructuringPatternInCatch(arrayPattern);
-      return;
-    } else {
-      throw new IllegalStateException("Unexpected ARRAY_PATTERN parent: " + parent);
-    }
-
-    // Convert 'var [x, y] = rhs' to:
-    // var temp = rhs;
-    // var x = temp[0];
-    // var y = temp[1];
-    String tempVarName = DESTRUCTURING_TEMP_VAR + (destructuringVarCounter++);
-    Node tempDecl = IR.var(IR.name(tempVarName), rhs.detachFromParent())
-        .useSourceInfoIfMissingFromForTree(arrayPattern);
-    nodeToDetach.getParent().addChildBefore(tempDecl, nodeToDetach);
-
-    int i = 0;
-    for (Node child = arrayPattern.getFirstChild(), next;
-        child != null;
-        child = next, i++) {
-      next = child.getNext();
-      if (child.isEmpty()) {
-        continue;
-      }
-
-      Node newLHS, newRHS;
-      if (child.isDefaultValue()) {
-        Node getElem = IR.getelem(IR.name(tempVarName), IR.number(i));
-        //   [x = defaultValue] = rhs;
-        // becomes
-        //   var temp = rhs;
-        //   x = (temp[0] === undefined) ? defaultValue : temp[0];
-        newLHS = child.getFirstChild().detachFromParent();
-        newRHS = defaultValueHook(getElem, child.getLastChild().detachFromParent());
-      } else if (child.isRest()) {
-        newLHS = child.detachFromParent();
-        newLHS.setType(Token.NAME);
-        // [].slice.call(temp, i)
-        newRHS = IR.call(
-            IR.getprop(IR.getprop(IR.arraylit(), IR.string("slice")), IR.string("call")),
-            IR.name(tempVarName), IR.number(i));
-      } else {
-        newLHS = child.detachFromParent();
-        newRHS = IR.getelem(IR.name(tempVarName), IR.number(i));
-      }
-      Node newNode;
-      if (parent.isAssign()) {
-        Node assignment = IR.assign(newLHS, newRHS);
-        newNode = IR.exprResult(assignment);
-      } else {
-        newNode = IR.declaration(newLHS, newRHS, parent.getType());
-      }
-      newNode.useSourceInfoIfMissingFromForTree(arrayPattern);
-
-      nodeToDetach.getParent().addChildBefore(newNode, nodeToDetach);
-      // Explicitly visit the LHS of the new node since it may be a nested
-      // destructuring pattern.
-      visit(t, newLHS, newLHS.getParent());
-    }
-    nodeToDetach.detachFromParent();
-    compiler.reportCodeChange();
-  }
-
-  private void visitDestructuringPatternInCatch(Node pattern) {
-    String tempVarName = DESTRUCTURING_TEMP_VAR + (destructuringVarCounter++);
-    Node catchBlock = pattern.getNext();
-
-    pattern.getParent().replaceChild(pattern, IR.name(tempVarName));
-    catchBlock.addChildToFront(
-        IR.declaration(pattern, IR.name(tempVarName), Token.LET));
-  }
-
-  private void visitDestructuringPatternInEnhancedFor(Node pattern) {
-    Node forNode;
-    int declarationType;
-    if (NodeUtil.isEnhancedFor(pattern.getParent())) {
-      forNode = pattern.getParent();
-      declarationType = Token.ASSIGN;
-    } else {
-      forNode = pattern.getParent().getParent();
-      declarationType = pattern.getParent().getType();
-      Preconditions.checkState(NodeUtil.isEnhancedFor(forNode));
-    }
-
-    String tempVarName = DESTRUCTURING_TEMP_VAR + (destructuringVarCounter++);
-    Node block = forNode.getLastChild();
-    if (declarationType == Token.ASSIGN) {
-      pattern.getParent().replaceChild(pattern,
-          IR.declaration(IR.name(tempVarName), Token.LET));
-      block.addChildToFront(
-          IR.exprResult(IR.assign(pattern, IR.name(tempVarName))));
-    } else {
-      pattern.getParent().replaceChild(pattern, IR.name(tempVarName));
-      block.addChildToFront(
-          IR.declaration(pattern, IR.name(tempVarName), declarationType));
+        break;
     }
   }
 
@@ -416,7 +199,7 @@ public final class Es6ToEs3Converter implements NodeTraversal.Callback, HotSwapC
   private void visitStringKey(Node n) {
     if (!n.hasChildren()) {
       Node name = IR.name(n.getString());
-      name.copyInformationFrom(n);
+      name.useSourceInfoIfMissingFrom(n);
       n.addChildToBack(name);
       compiler.reportCodeChange();
     }
@@ -481,75 +264,79 @@ public final class Es6ToEs3Converter implements NodeTraversal.Callback, HotSwapC
       return;
     }
     CheckClassAssignments checkAssigns = new CheckClassAssignments(name);
-    NodeTraversal.traverse(compiler, enclosingFunction, checkAssigns);
+    NodeTraversal.traverseEs6(compiler, enclosingFunction, checkAssigns);
   }
 
   /**
-   * Processes trailing default and rest parameters.
+   * Processes a rest parameter
    */
-  private void visitParamList(Node paramList, Node function) {
-    Node insertSpot = null;
-    Node block = function.getLastChild();
-    for (int i = 0; i < paramList.getChildCount(); i++) {
-      Node param = paramList.getChildAtIndex(i);
-      if (param.isDefaultValue()) {
-        Node nameOrPattern = param.removeFirstChild();
-        Node defaultValue = param.removeFirstChild();
-        Node newParam;
+  private void visitRestParam(Node restParam, Node paramList) {
+    Node functionBody = paramList.getLastSibling();
 
-        // Treat name=undefined (and equivalent) as if it was just name.  There
-        // is no need to generate a (name===void 0?void 0:name) statement for
-        // such arguments.
-        boolean isNoop = false;
-        if (!nameOrPattern.isName()) {
-          // Do not try to optimise unless nameOrPattern is a simple name.
-        } else if (defaultValue.isName()) {
-          isNoop = "undefined".equals(defaultValue.getString());
-        } else if (defaultValue.isVoid()) {
-          // Any kind of 'void literal' is fine, but 'void fun()' or anything
-          // else with side effects isn't.  We're not trying to be particularly
-          // smart here and treat 'void {}' for example as if it could cause
-          // side effects.  Any sane person will type 'name=undefined' or
-          // 'name=void 0' so this should not be an issue.
-          isNoop = NodeUtil.isImmutableValue(defaultValue.getFirstChild());
-        }
+    restParam.setType(Token.NAME);
+    restParam.setVarArgs(true);
 
-        if (isNoop) {
-          newParam = nameOrPattern.cloneTree();
-        } else {
-          newParam = nameOrPattern.isName() ? nameOrPattern
-              : IR.name(DESTRUCTURING_TEMP_VAR + (destructuringVarCounter++));
-          Node lhs = nameOrPattern.cloneTree();
-          Node rhs = defaultValueHook(newParam.cloneTree(), defaultValue);
-          Node newStatement = nameOrPattern.isName()
-              ? IR.exprResult(IR.assign(lhs, rhs))
-              : IR.var(lhs, rhs);
-          newStatement.useSourceInfoIfMissingFromForTree(param);
-          block.addChildAfter(newStatement, insertSpot);
-          insertSpot = newStatement;
-        }
-
-        paramList.replaceChild(param, newParam);
-        newParam.setOptionalArg(true);
-
-        compiler.reportCodeChange();
-      } else if (param.isRest()) { // rest parameter
-        param.setType(Token.NAME);
-        param.setVarArgs(true);
-        // Transpile to: param = [].slice.call(arguments, i);
-        Node newArr = IR.exprResult(IR.assign(IR.name(param.getString()),
-            IR.call(IR.getprop(IR.getprop(IR.arraylit(), IR.string("slice")),
-                IR.string("call")), IR.name("arguments"), IR.number(i))));
-        block.addChildAfter(newArr.useSourceInfoIfMissingFromForTree(param), insertSpot);
-        compiler.reportCodeChange();
-      } else if (param.isDestructuringPattern()) {
-        String tempVarName = DESTRUCTURING_TEMP_VAR + (destructuringVarCounter++);
-        paramList.replaceChild(param, IR.name(tempVarName));
-        Node newDecl = IR.var(param, IR.name(tempVarName));
-        block.addChildAfter(newDecl, insertSpot);
-        insertSpot = newDecl;
+    // Make sure rest parameters are typechecked
+    JSTypeExpression type = null;
+    JSDocInfo info = restParam.getJSDocInfo();
+    String paramName = restParam.getString();
+    if (info != null) {
+      type = info.getType();
+    } else {
+      JSDocInfo functionInfo = paramList.getParent().getJSDocInfo();
+      if (functionInfo != null) {
+        type = functionInfo.getParameterType(paramName);
       }
     }
+    if (type != null && type.getRoot().getType() != Token.ELLIPSIS) {
+      compiler.report(JSError.make(restParam, BAD_REST_PARAMETER_ANNOTATION));
+    }
+
+    if (!functionBody.hasChildren()) {
+      // If function has no body, we are done!
+      compiler.reportCodeChange();
+      return;
+    }
+
+    Node newBlock = IR.block().useSourceInfoFrom(functionBody);
+    Node name = IR.name(paramName);
+    Node let = IR.let(name, IR.name(REST_PARAMS))
+        .useSourceInfoIfMissingFromForTree(functionBody);
+    newBlock.addChildToFront(let);
+
+    for (Node child : functionBody.children()) {
+      newBlock.addChildToBack(child.detachFromParent());
+    }
+
+    if (type != null) {
+      Node arrayType = IR.string("Array");
+      Node typeNode = type.getRoot();
+      Node memberType =
+          typeNode.getType() == Token.ELLIPSIS
+              ? typeNode.getFirstChild().cloneNode()
+              : typeNode.cloneNode();
+      arrayType.addChildToFront(
+          new Node(Token.BLOCK, memberType).useSourceInfoIfMissingFrom(typeNode));
+      JSDocInfoBuilder builder = new JSDocInfoBuilder(false);
+      builder.recordType(
+          new JSTypeExpression(new Node(Token.BANG, arrayType), restParam.getSourceFileName()));
+      name.setJSDocInfo(builder.build());
+    }
+
+    int restIndex = paramList.getIndexOfChild(restParam);
+    Node newArr = IR.var(IR.name(REST_PARAMS), IR.arraylit());
+    functionBody.addChildToFront(newArr.useSourceInfoIfMissingFromForTree(restParam));
+    Node init = IR.var(IR.name(REST_INDEX), IR.number(restIndex));
+    Node cond = IR.lt(IR.name(REST_INDEX), IR.getprop(IR.name("arguments"), IR.string("length")));
+    Node incr = IR.inc(IR.name(REST_INDEX), false);
+    Node body = IR.block(IR.exprResult(IR.assign(
+        IR.getelem(IR.name(REST_PARAMS), IR.sub(IR.name(REST_INDEX), IR.number(restIndex))),
+        IR.getelem(IR.name("arguments"), IR.name(REST_INDEX)))));
+    functionBody.addChildAfter(IR.forNode(init, cond, incr, body)
+        .useSourceInfoIfMissingFromForTree(restParam), newArr);
+    functionBody.addChildToBack(newBlock);
+    compiler.reportCodeChange();
+
     // For now, we are running transpilation before type-checking, so we'll
     // need to make sure changes don't invalidate the JSDoc annotations.
     // Therefore we keep the parameter list the same length and only initialize
@@ -657,7 +444,7 @@ public final class Es6ToEs3Converter implements NodeTraversal.Callback, HotSwapC
             result);
       } else {
         if (!propdef.hasChildren()) {
-          Node name = IR.name(propdef.getString()).copyInformationFrom(propdef);
+          Node name = IR.name(propdef.getString()).useSourceInfoIfMissingFrom(propdef);
           propdef.addChildToBack(name);
         }
         Node val = propdef.removeFirstChild();
@@ -718,7 +505,8 @@ public final class Es6ToEs3Converter implements NodeTraversal.Callback, HotSwapC
     JSDocInfo ctorJSDocInfo = null;
     // Process all members of the class
     Node classMembers = classNode.getLastChild();
-    Map<String, JSTypeExpression> membersToDeclare = new LinkedHashMap<>();
+    Map<String, JSDocInfo> prototypeMembersToDeclare = new LinkedHashMap<>();
+    Map<String, JSDocInfo> classMembersToDeclare = new LinkedHashMap<>();
     for (Node member : classMembers.children()) {
       if (member.isEmpty()) {
         continue;
@@ -729,17 +517,25 @@ public final class Es6ToEs3Converter implements NodeTraversal.Callback, HotSwapC
           "Member variables should have been transpiled earlier: ", member);
 
       if (member.isGetterDef() || member.isSetterDef()) {
-        if (member.isStaticMember()) {
-          compiler.report(JSError.make(member, CANNOT_CONVERT_YET, "static getters/setters"));
-        }
         JSTypeExpression typeExpr = getTypeFromGetterOrSetter(member).clone();
         addToDefinePropertiesObject(metadata, member);
 
-        JSTypeExpression existingType = membersToDeclare.get(member.getString());
+        Map<String, JSDocInfo> membersToDeclare =
+            member.isStaticMember() ? classMembersToDeclare : prototypeMembersToDeclare;
+        JSDocInfo existingJSDoc = membersToDeclare.get(member.getString());
+        JSTypeExpression existingType = existingJSDoc == null ? null : existingJSDoc.getType();
         if (existingType != null && !existingType.equals(typeExpr)) {
-          compiler.report(JSError.make(member, CONFLICTING_GETTER_SETTER_TYPE));
+          compiler.report(JSError.make(member, CONFLICTING_GETTER_SETTER_TYPE, member.getString()));
         } else {
-          membersToDeclare.put(member.getString(), typeExpr);
+          JSDocInfoBuilder jsDoc = new JSDocInfoBuilder(false);
+          jsDoc.recordType(typeExpr);
+          if (member.getJSDocInfo() != null && member.getJSDocInfo().isExport()) {
+            jsDoc.recordExport();
+          }
+          if (member.isStaticMember()) {
+            jsDoc.recordNoCollapse();
+          }
+          membersToDeclare.put(member.getString(), jsDoc.build());
         }
       } else if (member.isMemberFunctionDef() && member.getString().equals("constructor")) {
         ctorJSDocInfo = member.getJSDocInfo();
@@ -771,7 +567,7 @@ public final class Es6ToEs3Converter implements NodeTraversal.Callback, HotSwapC
         }
 
         Node newNode = NodeUtil.newExpr(assign);
-        metadata.insertStaticMember(newNode);
+        metadata.insertNodeAndAdvance(newNode);
       }
     }
 
@@ -779,26 +575,41 @@ public final class Es6ToEs3Converter implements NodeTraversal.Callback, HotSwapC
     // so that the typechecker knows those properties exist on the class.
     // This is a temporary solution. Eventually, the type checker should understand
     // Object.defineProperties calls directly.
-    for (Map.Entry<String, JSTypeExpression> entry : membersToDeclare.entrySet()) {
+    for (Map.Entry<String, JSDocInfo> entry : prototypeMembersToDeclare.entrySet()) {
       String declaredMember = entry.getKey();
-      Node declaration = IR.getprop(
-          prototypeAccess.cloneTree(),
-          IR.string(declaredMember));
-      JSDocInfoBuilder declInfo = new JSDocInfoBuilder(true);
-
-      declInfo.recordType(entry.getValue());
-      declaration.setJSDocInfo(declInfo.build());
-      metadata.insertStaticMember(
+      Node declaration = IR.getprop(prototypeAccess.cloneTree(), IR.string(declaredMember));
+      declaration.setJSDocInfo(entry.getValue());
+      metadata.insertNodeAndAdvance(
+          IR.exprResult(declaration).useSourceInfoIfMissingFromForTree(classNode));
+    }
+    for (Map.Entry<String, JSDocInfo> entry : classMembersToDeclare.entrySet()) {
+      String declaredMember = entry.getKey();
+      Node declaration = IR.getprop(classNameAccess.cloneTree(), IR.string(declaredMember));
+      declaration.setJSDocInfo(entry.getValue());
+      metadata.insertNodeAndAdvance(
           IR.exprResult(declaration).useSourceInfoIfMissingFromForTree(classNode));
     }
 
-    if (metadata.defineProperties.hasChildren()) {
-      Node definePropsCall = IR.exprResult(IR.call(
-          NodeUtil.newQName(compiler, "Object.defineProperties"),
-          prototypeAccess.cloneTree(),
-          metadata.defineProperties));
+    if (metadata.definePropertiesObjForPrototype.hasChildren()) {
+      Node definePropsCall =
+          IR.exprResult(
+              IR.call(
+                  NodeUtil.newQName(compiler, "Object.defineProperties"),
+                  prototypeAccess.cloneTree(),
+                  metadata.definePropertiesObjForPrototype));
       definePropsCall.useSourceInfoIfMissingFromForTree(classNode);
-      metadata.insertStaticMember(definePropsCall);
+      metadata.insertNodeAndAdvance(definePropsCall);
+    }
+
+    if (metadata.definePropertiesObjForClass.hasChildren()) {
+      Node definePropsCall =
+          IR.exprResult(
+              IR.call(
+                  NodeUtil.newQName(compiler, "Object.defineProperties"),
+                  classNameAccess.cloneTree(),
+                  metadata.definePropertiesObjForClass));
+      definePropsCall.useSourceInfoIfMissingFromForTree(classNode);
+      metadata.insertNodeAndAdvance(definePropsCall);
     }
 
     Preconditions.checkNotNull(constructor);
@@ -828,16 +639,6 @@ public final class Es6ToEs3Converter implements NodeTraversal.Callback, HotSwapC
         newInfo.recordBaseType(new JSTypeExpression(new Node(Token.BANG,
             IR.string(superClassString)),
             metadata.superClassNameNode.getSourceFileName()));
-
-        Node copyProps = IR.call(
-            NodeUtil.newQName(compiler, COPY_PROP),
-            NodeUtil.newQName(compiler, metadata.fullClassName),
-            NodeUtil.newQName(compiler, superClassString));
-        compiler.needsEs6Runtime = true;
-
-        copyProps.useSourceInfoIfMissingFromForTree(classNode);
-        enclosingStatement.getParent().addChildAfter(
-            IR.exprResult(copyProps).srcref(classNode), enclosingStatement);
       }
     }
 
@@ -857,7 +658,7 @@ public final class Es6ToEs3Converter implements NodeTraversal.Callback, HotSwapC
 
     if (NodeUtil.isStatement(classNode)) {
       constructor.getFirstChild().setString("");
-      Node ctorVar = IR.var(IR.name(metadata.fullClassName), constructor);
+      Node ctorVar = IR.let(metadata.classNameNode.cloneNode(), constructor);
       ctorVar.useSourceInfoIfMissingFromForTree(classNode);
       parent.replaceChild(classNode, ctorVar);
     } else {
@@ -907,10 +708,17 @@ public final class Es6ToEs3Converter implements NodeTraversal.Callback, HotSwapC
   }
 
   private void addToDefinePropertiesObject(ClassDeclarationMetadata metadata, Node member) {
-    Node prop = NodeUtil.getFirstPropMatchingKey(metadata.defineProperties, member.getString());
+    Node obj =
+        member.isStaticMember()
+            ? metadata.definePropertiesObjForClass
+            : metadata.definePropertiesObjForPrototype;
+    Node prop = NodeUtil.getFirstPropMatchingKey(obj, member.getString());
     if (prop == null) {
-      prop = IR.objectlit();
-      metadata.defineProperties.addChildToBack(IR.stringKey(member.getString(), prop));
+      prop =
+          IR.objectlit(
+              IR.stringKey("configurable", IR.trueNode()),
+              IR.stringKey("enumerable", IR.trueNode()));
+      obj.addChildToBack(IR.stringKey(member.getString(), prop));
     }
 
     Node function = member.getLastChild();
@@ -945,100 +753,8 @@ public final class Es6ToEs3Converter implements NodeTraversal.Callback, HotSwapC
     }
   }
 
-  /**
-   * Converts ES6 arrow functions to standard anonymous ES3 functions.
-   */
-  private void visitArrowFunction(NodeTraversal t, Node n) {
-    n.setIsArrowFunction(false);
-    Node body = n.getLastChild();
-    if (!body.isBlock()) {
-      body.detachFromParent();
-      body = IR.block(IR.returnNode(body).srcref(body)).srcref(body);
-      n.addChildToBack(body);
-    }
-
-    UpdateThisAndArgumentsReferences updater =
-        new UpdateThisAndArgumentsReferences();
-    NodeTraversal.traverse(compiler, body, updater);
-    addVarDecls(t, updater.changedThis, updater.changedArguments);
-
-    compiler.reportCodeChange();
-  }
-
-  private void addVarDecls(
-      NodeTraversal t, boolean addThis, boolean addArguments) {
-    Scope scope = t.getScope();
-    if (scope.isDeclared(THIS_VAR, false)) {
-      addThis = false;
-    }
-    if (scope.isDeclared(ARGUMENTS_VAR, false)) {
-      addArguments = false;
-    }
-
-    Node parent = t.getScopeRoot();
-    if (parent.isFunction()) {
-      // Add the new node at the beginning of the function body.
-      parent = parent.getLastChild();
-    }
-    if (parent.isSyntheticBlock() && parent.getFirstChild().isScript()) {
-      // Add the new node inside the SCRIPT node instead of the
-      // synthetic block that contains it.
-      parent = parent.getFirstChild();
-    }
-
-    CompilerInput input = compiler.getInput(parent.getInputId());
-    if (addArguments) {
-      Node name = IR.name(ARGUMENTS_VAR);
-      Node argumentsVar = IR.declaration(name, IR.name("arguments"), Token.CONST);
-      argumentsVar.useSourceInfoIfMissingFromForTree(parent);
-      parent.addChildToFront(argumentsVar);
-      scope.declare(ARGUMENTS_VAR, name, input);
-    }
-    if (addThis) {
-      Node name = IR.name(THIS_VAR);
-      Node thisVar = IR.declaration(name, IR.thisNode(), Token.CONST);
-      thisVar.useSourceInfoIfMissingFromForTree(parent);
-      parent.addChildToFront(thisVar);
-      scope.declare(THIS_VAR, name, input);
-    }
-  }
-
   private static String getUniqueClassName(String qualifiedName) {
     return qualifiedName;
-  }
-
-  /**
-   * Helper for transpiling DEFAULT_VALUE trees.
-   */
-  private static Node defaultValueHook(Node getprop, Node defaultValue) {
-    return IR.hook(
-        IR.sheq(getprop, IR.name("undefined")),
-        defaultValue,
-        getprop.cloneTree());
-  }
-
-  private static class UpdateThisAndArgumentsReferences
-      implements NodeTraversal.Callback {
-    private boolean changedThis = false;
-    private boolean changedArguments = false;
-
-    @Override
-    public void visit(NodeTraversal t, Node n, Node parent) {
-      if (n.isThis()) {
-        Node name = IR.name(THIS_VAR).srcref(n);
-        parent.replaceChild(n, name);
-        changedThis = true;
-      } else if (n.isName() && n.getString().equals("arguments")) {
-        Node name = IR.name(ARGUMENTS_VAR).srcref(n);
-        parent.replaceChild(n, name);
-        changedArguments = true;
-      }
-    }
-
-    @Override
-    public boolean shouldTraverse(NodeTraversal t, Node n, Node parent) {
-      return !n.isFunction() || n.isArrowFunction();
-    }
   }
 
   private class CheckClassAssignments extends NodeTraversal.AbstractPostOrderCallback {
@@ -1083,10 +799,16 @@ public final class Es6ToEs3Converter implements NodeTraversal.Callback, HotSwapC
     private Node insertionPoint;
 
     /**
-     * An object literal node that will be used in a call to Object.defineProperties. Used for
-     * transpilation of getters and setters.
+     * An object literal node that will be used in a call to Object.defineProperties, to add getters
+     * and setters to the prototype.
      */
-    private final Node defineProperties;
+    private final Node definePropertiesObjForPrototype;
+
+    /**
+     * An object literal node that will be used in a call to Object.defineProperties, to add getters
+     * and setters to the class.
+     */
+    private final Node definePropertiesObjForClass;
 
     /**
      * The fully qualified name of the class, which will be used in the output. May come from the
@@ -1101,7 +823,8 @@ public final class Es6ToEs3Converter implements NodeTraversal.Callback, HotSwapC
     private ClassDeclarationMetadata(Node insertionPoint, String fullClassName,
         boolean anonymous, Node classNameNode, Node superClassNameNode) {
       this.insertionPoint = insertionPoint;
-      this.defineProperties = IR.objectlit();
+      this.definePropertiesObjForClass = IR.objectlit();
+      this.definePropertiesObjForPrototype = IR.objectlit();
       this.fullClassName = fullClassName;
       this.anonymous = anonymous;
       this.classNameNode = classNameNode;
@@ -1138,7 +861,7 @@ public final class Es6ToEs3Converter implements NodeTraversal.Callback, HotSwapC
       }
     }
 
-    void insertStaticMember(Node newNode) {
+    void insertNodeAndAdvance(Node newNode) {
       insertionPoint.getParent().addChildAfter(newNode, insertionPoint);
       insertionPoint = newNode;
     }

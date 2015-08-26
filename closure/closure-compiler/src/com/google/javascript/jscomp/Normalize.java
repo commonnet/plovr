@@ -379,7 +379,7 @@ class Normalize implements CompilerPass {
             Node expr = n.getFirstChild();
             n.setType(Token.FOR);
             Node empty = IR.empty();
-            empty.copyInformationFrom(n);
+            empty.useSourceInfoIfMissingFrom(n);
             n.addChildBefore(empty, expr);
             n.addChildAfter(empty.cloneNode(), expr);
             reportCodeChange("WHILE node");
@@ -550,7 +550,7 @@ class Normalize implements CompilerPass {
           return;
         default:
           Node block = IR.block();
-          block.copyInformationFrom(last);
+          block.useSourceInfoIfMissingFrom(last);
           n.replaceChild(last, block);
           block.addChildToFront(last);
           reportCodeChange("LABEL normalization");
@@ -598,7 +598,7 @@ class Normalize implements CompilerPass {
             } else if (!c.getFirstChild().isEmpty()) {
               Node init = c.getFirstChild();
               Node empty = IR.empty();
-              empty.copyInformationFrom(c);
+              empty.useSourceInfoIfMissingFrom(c);
               c.replaceChild(init, empty);
 
               Node newStatement;
@@ -790,7 +790,7 @@ class Normalize implements CompilerPass {
      *      the scope creator, as the next node of interest is the parent's
      *      next sibling.
      */
-    private void replaceVarWithAssignment(Node n, Node parent, Node gramps) {
+    private void replaceVarWithAssignment(Node n, Node parent, Node grandparent) {
       if (n.hasChildren()) {
         // The  *  is being initialize, preserve the new value.
         parent.removeChild(n);
@@ -799,20 +799,20 @@ class Normalize implements CompilerPass {
         n.removeChild(value);
         Node replacement = IR.assign(n, value);
         replacement.setJSDocInfo(parent.getJSDocInfo());
-        replacement.copyInformationFrom(parent);
-        gramps.replaceChild(parent, NodeUtil.newExpr(replacement));
+        replacement.useSourceInfoIfMissingFrom(parent);
+        grandparent.replaceChild(parent, NodeUtil.newExpr(replacement));
       } else {
         // It is an empty reference remove it.
-        if (NodeUtil.isStatementBlock(gramps)) {
-          gramps.removeChild(parent);
-        } else if (gramps.isFor()) {
+        if (NodeUtil.isStatementBlock(grandparent)) {
+          grandparent.removeChild(parent);
+        } else if (grandparent.isFor()) {
           // This is the "for (var a in b)..." case.  We don't need to worry
           // about initializers in "for (var a;;)..." as those are moved out
           // as part of the other normalizations.
           parent.removeChild(n);
-          gramps.replaceChild(parent, n);
+          grandparent.replaceChild(parent, n);
         } else {
-          Preconditions.checkState(gramps.isLabel());
+          Preconditions.checkState(grandparent.isLabel());
           // We should never get here. LABELs with a single VAR statement should
           // already have been normalized to have a BLOCK.
           throw new IllegalStateException("Unexpected LABEL");

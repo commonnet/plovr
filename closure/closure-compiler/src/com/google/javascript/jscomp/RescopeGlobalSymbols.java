@@ -398,7 +398,8 @@ final class RescopeGlobalSymbols implements CompilerPass {
      */
     void declareModuleGlobals() {
       for (ModuleGlobal global : preDeclarations) {
-        if (global.root.getFirstChild().isVar()) {
+        if (global.root.getFirstChild() != null
+            && global.root.getFirstChild().isVar()) {
           global.root.getFirstChild().addChildToBack(global.name);
         } else {
           global.root.addChildToFront(
@@ -489,7 +490,7 @@ final class RescopeGlobalSymbols implements CompilerPass {
       Node comma = commas.get(0);
       for (int i = 1; i < commas.size(); i++) {
         Node nextComma = IR.comma(comma, commas.get(i));
-        nextComma.copyInformationFrom(source);
+        nextComma.useSourceInfoIfMissingFrom(source);
         comma = nextComma;
       }
       return comma;

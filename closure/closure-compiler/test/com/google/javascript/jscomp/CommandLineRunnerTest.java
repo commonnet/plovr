@@ -165,6 +165,17 @@ public final class CommandLineRunnerTest extends TestCase {
     test("function f() { this.a = 3; }", CheckGlobalThis.GLOBAL_THIS);
   }
 
+  public void testWarningGuardWildcard1() {
+    args.add("--jscomp_warning=*");
+    test("function f() { this.a = 3; }", CheckGlobalThis.GLOBAL_THIS);
+  }
+
+  public void testWarningGuardWildcardOrdering() {
+    args.add("--jscomp_warning=*");
+    args.add("--jscomp_off=globalThis");
+    testSame("function f() { this.a = 3; }");
+  }
+
   public void testSimpleModeLeavesUnusedParams() {
     args.add("--compilation_level=SIMPLE_OPTIMIZATIONS");
     testSame("window.f = function(a) {};");
@@ -619,8 +630,7 @@ public final class CommandLineRunnerTest extends TestCase {
   }
 
   public void testHoistedFunction2() {
-    test("if (window) { f(); function f() {} }",
-         "if (window) { var f = function() {}; f(); }");
+    test("if (window) { f(); function f() {} }", "");
   }
 
   public void testExternsLifting1() throws Exception{
@@ -889,7 +899,7 @@ public final class CommandLineRunnerTest extends TestCase {
 
   public void testOnlyClosureDependenciesEmptyEntryPoints() throws Exception {
     // Prevents this from trying to load externs.zip
-    args.add("--use_only_custom_externs=true");
+    args.add("--env=CUSTOM");
 
     args.add("--only_closure_dependencies=true");
     try {
@@ -996,7 +1006,7 @@ public final class CommandLineRunnerTest extends TestCase {
 
   public void testSourceMapLocationsTranslations3() {
     // Prevents this from trying to load externs.zip
-    args.add("--use_only_custom_externs=true");
+    args.add("--env=CUSTOM");
 
     args.add("--js_output_file");
     args.add("/path/to/out.js");
@@ -1269,7 +1279,7 @@ public final class CommandLineRunnerTest extends TestCase {
   }
 
   public void testNoSrCFilesWithManifest() throws IOException {
-    args.add("--use_only_custom_externs=true");
+    args.add("--env=CUSTOM");
     args.add("--output_manifest=test.MF");
     CommandLineRunner runner = createCommandLineRunner(new String[0]);
     String expectedMessage = "";

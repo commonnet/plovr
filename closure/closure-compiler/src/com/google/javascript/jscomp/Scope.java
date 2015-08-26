@@ -47,7 +47,10 @@ public class Scope implements StaticScope {
    */
   Scope(Scope parent, Node rootNode) {
     Preconditions.checkNotNull(parent);
-    Preconditions.checkArgument(rootNode != parent.rootNode);
+    Preconditions.checkNotNull(rootNode);
+    Preconditions.checkArgument(
+        rootNode != parent.rootNode,
+        "Root node: %s\nParent's root node: %s", rootNode, parent.rootNode);
 
     this.parent = parent;
     this.rootNode = rootNode;
@@ -55,9 +58,15 @@ public class Scope implements StaticScope {
   }
 
   protected Scope(Node rootNode) {
+    Preconditions.checkNotNull(rootNode);
     this.parent = null;
     this.rootNode = rootNode;
     this.depth = 0;
+  }
+
+  @Override
+  public String toString() {
+    return "Scope@" + rootNode;
   }
 
   static Scope createGlobalScope(Node rootNode) {
@@ -166,12 +175,28 @@ public class Scope implements StaticScope {
       if (scope.vars.containsKey(name)) {
         return true;
       }
-      if (scope.parent != null && recurse) {
+
+      // In ES6, we create a separate "function parameter scope" above the function block scope to
+      // handle default parameters. Since nothing in the function block scope is allowed to shadow
+      // the variables in the function scope, we treat the two scopes as one in this method.
+      if (scope.isFunctionBlockScope() || (scope.parent != null && recurse)) {
         scope = scope.parent;
         continue;
       }
       return false;
     }
+  }
+
+  public boolean isDeclaredInFunction(String name) {
+    if (vars.containsKey(name)) {
+      return true;
+    }
+    Scope parent = getParent();
+    if (parent != null && parent.getRootNode().isFunction()
+        && parent.isDeclared(name, false)) {
+      return true;
+    }
+    return false;
   }
 
   /**
@@ -235,6 +260,10 @@ public class Scope implements StaticScope {
 
   public boolean isFunctionBlockScope() {
     return isBlockScope() && parent != null && parent.getRootNode().isFunction();
+  }
+
+  public boolean isFunctionScope() {
+    return getRootNode().isFunction();
   }
 
   public Scope getClosestHoistScope() {

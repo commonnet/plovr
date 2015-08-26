@@ -31,8 +31,33 @@ var symbol;
  */
 function Symbol(description) {}
 
+
+/**
+ * @param {string} sym
+ * @return {symbol|undefined}
+ * @see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Symbol/for
+ */
+Symbol.for;
+
+
+/**
+ * @param {symbol} sym
+ * @return {string|undefined}
+ * @see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Symbol/keyFor
+ */
+Symbol.keyFor;
+
+
+// Well known symbols
+
 /** @const {symbol} */
 Symbol.iterator;
+
+/** @const {symbol} */
+Symbol.toStringTag;
+
+/** @const {symbol} */
+Symbol.unscopables;
 
 
 /**
@@ -43,7 +68,7 @@ function Iterable() {}
 
 // TODO(johnlenz): remove this when the compiler understands "symbol" natively
 /**
- * @return {Iterator.<VALUE>}
+ * @return {Iterator<VALUE>}
  * @suppress {externsValidation}
  */
 Iterable.prototype[Symbol.iterator] = function() {};
@@ -67,11 +92,11 @@ Iterator.prototype.next;
 
 /**
  * @constructor
- * @see http://people.mozilla.org/~jorendorff/es6-draft.html#sec-generator-objects
+ * @see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Generator
  * @implements {Iterator<VALUE>}
  * @template VALUE
  */
-var Generator = function() {};
+function Generator() {}
 
 /**
  * @param {?=} opt_value
@@ -193,7 +218,7 @@ Math.cbrt = function(value) {};
  * @param {...number} var_args
  * @return {number}
  * @nosideeffects
- * @see http://people.mozilla.org/~jorendorff/es6-draft.html#sec-math.hypot
+ * @see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Math/hypot
  */
 Math.hypot = function(value1, var_args) {};
 
@@ -202,7 +227,7 @@ Math.hypot = function(value1, var_args) {};
  * @param {*} a
  * @param {*} b
  * @return {boolean}
- * @see http://people.mozilla.org/~jorendorff/es6-draft.html#sec-object.is
+ * @see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Object/is
  */
 Object.is;
 
@@ -230,6 +255,65 @@ Number.prototype.toLocaleString = function(opt_locales, opt_options) {};
  * @see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/String/repeat
  */
 String.prototype.repeat = function(count) {};
+
+/**
+ * @param {string} template
+ * @param {...*} var_args
+ * @return {string}
+ * @see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/String/raw
+ */
+String.raw = function(template, var_args) {};
+
+
+/**
+ * @param {number} codePoint
+ * @return {string}
+ */
+String.fromCodePoint = function(codePoint) {};
+
+
+/**
+ * @param {number} index
+ * @return {number}
+ * @nosideeffects
+ */
+String.prototype.codePointAt = function(index) {};
+
+
+/**
+ * @param {string=} opt_form
+ * @return {string}
+ * @see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/String/normalize
+ */
+String.prototype.normalize = function(opt_form) {};
+
+
+/**
+ * @param {string} searchString
+ * @param {number=} opt_position
+ * @return {boolean}
+ * @nosideeffects
+ * @see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/String/startsWith
+ */
+String.prototype.startsWith = function(searchString, opt_position) {};
+
+/**
+ * @param {string} searchString
+ * @param {number=} opt_position
+ * @return {boolean}
+ * @nosideeffects
+ * @see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/String/endsWith
+ */
+String.prototype.endsWith = function(searchString, opt_position) {};
+
+/**
+ * @param {string} searchString
+ * @param {number=} opt_position
+ * @return {boolean}
+ * @nosideeffects
+ * @see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/String/includes
+ */
+String.prototype.includes = function(searchString, opt_position) {};
 
 
 /**
@@ -283,7 +367,7 @@ var BufferSource;
 
 
 /**
- * @param {number|ArrayBufferView|Array.<number>|ArrayBuffer} length or array
+ * @param {number|ArrayBufferView|Array<number>|ArrayBuffer} length or array
  *     or buffer
  * @param {number=} opt_byteOffset
  * @param {number=} opt_length
@@ -315,7 +399,7 @@ Int8Array.prototype.BYTES_PER_ELEMENT;
 Int8Array.prototype.length;
 
 /**
- * @param {ArrayBufferView|Array.<number>} array
+ * @param {ArrayBufferView|Array<number>} array
  * @param {number=} opt_offset
  */
 Int8Array.prototype.set = function(array, opt_offset) {};
@@ -330,7 +414,7 @@ Int8Array.prototype.subarray = function(begin, opt_end) {};
 
 
 /**
- * @param {number|ArrayBufferView|Array.<number>|ArrayBuffer} length or array
+ * @param {number|ArrayBufferView|Array<number>|ArrayBuffer} length or array
  *     or buffer
  * @param {number=} opt_byteOffset
  * @param {number=} opt_length
@@ -352,7 +436,7 @@ Uint8Array.prototype.BYTES_PER_ELEMENT;
 Uint8Array.prototype.length;
 
 /**
- * @param {ArrayBufferView|Array.<number>} array
+ * @param {ArrayBufferView|Array<number>} array
  * @param {number=} opt_offset
  */
 Uint8Array.prototype.set = function(array, opt_offset) {};
@@ -367,7 +451,7 @@ Uint8Array.prototype.subarray = function(begin, opt_end) {};
 
 
 /**
- * @param {number|ArrayBufferView|Array.<number>|ArrayBuffer} length or array
+ * @param {number|ArrayBufferView|Array<number>|ArrayBuffer} length or array
  *     or buffer
  * @param {number=} opt_byteOffset
  * @param {number=} opt_length
@@ -389,7 +473,7 @@ Uint8ClampedArray.prototype.BYTES_PER_ELEMENT;
 Uint8ClampedArray.prototype.length;
 
 /**
- * @param {ArrayBufferView|Array.<number>} array
+ * @param {ArrayBufferView|Array<number>} array
  * @param {number=} opt_offset
  */
 Uint8ClampedArray.prototype.set = function(array, opt_offset) {};
@@ -413,7 +497,7 @@ var CanvasPixelArray;
 
 
 /**
- * @param {number|ArrayBufferView|Array.<number>|ArrayBuffer} length or array
+ * @param {number|ArrayBufferView|Array<number>|ArrayBuffer} length or array
  *     or buffer
  * @param {number=} opt_byteOffset
  * @param {number=} opt_length
@@ -435,7 +519,7 @@ Int16Array.prototype.BYTES_PER_ELEMENT;
 Int16Array.prototype.length;
 
 /**
- * @param {ArrayBufferView|Array.<number>} array
+ * @param {ArrayBufferView|Array<number>} array
  * @param {number=} opt_offset
  */
 Int16Array.prototype.set = function(array, opt_offset) {};
@@ -450,7 +534,7 @@ Int16Array.prototype.subarray = function(begin, opt_end) {};
 
 
 /**
- * @param {number|ArrayBufferView|Array.<number>|ArrayBuffer} length or array
+ * @param {number|ArrayBufferView|Array<number>|ArrayBuffer} length or array
  *     or buffer
  * @param {number=} opt_byteOffset
  * @param {number=} opt_length
@@ -472,7 +556,7 @@ Uint16Array.prototype.BYTES_PER_ELEMENT;
 Uint16Array.prototype.length;
 
 /**
- * @param {ArrayBufferView|Array.<number>} array
+ * @param {ArrayBufferView|Array<number>} array
  * @param {number=} opt_offset
  */
 Uint16Array.prototype.set = function(array, opt_offset) {};
@@ -487,7 +571,7 @@ Uint16Array.prototype.subarray = function(begin, opt_end) {};
 
 
 /**
- * @param {number|ArrayBufferView|Array.<number>|ArrayBuffer} length or array
+ * @param {number|ArrayBufferView|Array<number>|ArrayBuffer} length or array
  *     or buffer
  * @param {number=} opt_byteOffset
  * @param {number=} opt_length
@@ -509,7 +593,7 @@ Int32Array.prototype.BYTES_PER_ELEMENT;
 Int32Array.prototype.length;
 
 /**
- * @param {ArrayBufferView|Array.<number>} array
+ * @param {ArrayBufferView|Array<number>} array
  * @param {number=} opt_offset
  */
 Int32Array.prototype.set = function(array, opt_offset) {};
@@ -524,7 +608,7 @@ Int32Array.prototype.subarray = function(begin, opt_end) {};
 
 
 /**
- * @param {number|ArrayBufferView|Array.<number>|ArrayBuffer} length or array
+ * @param {number|ArrayBufferView|Array<number>|ArrayBuffer} length or array
  *     or buffer
  * @param {number=} opt_byteOffset
  * @param {number=} opt_length
@@ -546,7 +630,7 @@ Uint32Array.prototype.BYTES_PER_ELEMENT;
 Uint32Array.prototype.length;
 
 /**
- * @param {ArrayBufferView|Array.<number>} array
+ * @param {ArrayBufferView|Array<number>} array
  * @param {number=} opt_offset
  */
 Uint32Array.prototype.set = function(array, opt_offset) {};
@@ -561,7 +645,7 @@ Uint32Array.prototype.subarray = function(begin, opt_end) {};
 
 
 /**
- * @param {number|ArrayBufferView|Array.<number>|ArrayBuffer} length or array
+ * @param {number|ArrayBufferView|Array<number>|ArrayBuffer} length or array
  *     or buffer
  * @param {number=} opt_byteOffset
  * @param {number=} opt_length
@@ -583,7 +667,7 @@ Float32Array.prototype.BYTES_PER_ELEMENT;
 Float32Array.prototype.length;
 
 /**
- * @param {ArrayBufferView|Array.<number>} array
+ * @param {ArrayBufferView|Array<number>} array
  * @param {number=} opt_offset
  */
 Float32Array.prototype.set = function(array, opt_offset) {};
@@ -598,7 +682,7 @@ Float32Array.prototype.subarray = function(begin, opt_end) {};
 
 
 /**
- * @param {number|ArrayBufferView|Array.<number>|ArrayBuffer} length or array
+ * @param {number|ArrayBufferView|Array<number>|ArrayBuffer} length or array
  *     or buffer
  * @param {number=} opt_byteOffset
  * @param {number=} opt_length
@@ -620,7 +704,7 @@ Float64Array.prototype.BYTES_PER_ELEMENT;
 Float64Array.prototype.length;
 
 /**
- * @param {ArrayBufferView|Array.<number>} array
+ * @param {ArrayBufferView|Array<number>} array
  * @param {number=} opt_offset
  */
 Float64Array.prototype.set = function(array, opt_offset) {};
@@ -797,7 +881,7 @@ var Thenable;
  * @interface
  * @template TYPE
  */
-var IThenable = function() {};
+function IThenable() {}
 
 
 /**
@@ -823,28 +907,37 @@ IThenable.prototype.then = function(opt_onFulfilled, opt_onRejected) {};
 
 
 /**
- * @see https://people.mozilla.org/~jorendorff/es6-draft.html#sec-promise-objects
+ * @see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise
  * @param {function(
- *             function((TYPE|IThenable.<TYPE>|Thenable|null)=),
+ *             function((TYPE|IThenable<TYPE>|Thenable|null)=),
  *             function(*=))} resolver
  * @constructor
- * @implements {IThenable.<TYPE>}
+ * @implements {IThenable<TYPE>}
  * @template TYPE
  */
-var Promise = function(resolver) {};
+function Promise(resolver) {}
 
 
 /**
- * @param {(TYPE|IThenable.<TYPE>)=} opt_value
- * @return {!Promise.<TYPE>}
- * @template TYPE
+ * @param {VALUE=} opt_value
+ * @return {RESULT}
+ * @template VALUE
+ * @template RESULT := type('Promise',
+ *     cond(isUnknown(VALUE), unknown(),
+ *       mapunion(VALUE, (V) =>
+ *         cond(isTemplatized(V) && sub(rawTypeOf(V), 'IThenable'),
+ *           templateTypeOf(V, 0),
+ *           cond(sub(V, 'Thenable'),
+ *              unknown(),
+ *              V)))))
+ * =:
  */
 Promise.resolve = function(opt_value) {};
 
 
 /**
  * @param {*=} opt_error
- * @return {!Promise.<?>}
+ * @return {!Promise<?>}
  */
 Promise.reject = function(opt_error) {};
 
@@ -861,8 +954,8 @@ Promise.all = function(iterable) {};
 /**
  * @template T
  * @see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise
- * @param {!Array.<T>} iterable
- * @return {!Promise.<T>}
+ * @param {!Array<T>} iterable
+ * @return {!Promise<T>}
  */
 Promise.race = function(iterable) {};
 
@@ -892,7 +985,110 @@ Promise.prototype.then = function(opt_onFulfilled, opt_onRejected) {};
 
 /**
  * @param {function(*): RESULT} onRejected
- * @return {!Promise.<RESULT>}
+ * @return {!Promise<RESULT>}
  * @template RESULT
  */
 Promise.prototype.catch = function(onRejected) {};
+
+
+/** @return {!Array<number>} */
+Array.prototype.keys;
+
+
+/**
+ * @return {!Array<!Array>} An array of [key, value] pairs.
+ */
+Array.prototype.entries;
+
+
+/** @return {!Array<symbol>} */
+Object.getOwnPropertySymbols;
+
+
+/** @return {void} */
+Object.setPrototypeOf;
+
+
+
+/**
+ * @const {number}
+ * @see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Number/EPSILON
+ */
+Number.EPSILON;
+
+/**
+ * @const {number}
+ * @see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Number/MIN_SAFE_INTEGER
+ */
+Number.MIN_SAFE_INTEGER;
+
+/**
+ * @const {number}
+ * @see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Number/MAX_SAFE_INTEGER
+ */
+Number.MAX_SAFE_INTEGER;
+
+
+
+/**
+ * Parse an integer. Use of {@code parseInt} without {@code base} is strictly
+ * banned in Google. If you really want to parse octal or hex based on the
+ * leader, then pass {@code undefined} as the base.
+ *
+ * @param {string} string
+ * @param {number|undefined} radix
+ * @return {number}
+ * @nosideeffects
+ * @see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Number/parseInt
+ */
+Number.parseInt = function(string, radix) {};
+
+/**
+ * @param {string} string
+ * @return {number}
+ * @nosideeffects
+ * @see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Number/parseFloat
+ */
+Number.parseFloat = function(string) {};
+
+/**
+ * @param {number} value
+ * @return {boolean}
+ * @nosideeffects
+ * @see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Number/isNaN
+ */
+Number.isNaN = function(value) {};
+
+/**
+ * @param {number} value
+ * @return {boolean}
+ * @nosideeffects
+ * @see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Number/isFinite
+ */
+Number.isFinite = function(value) {};
+
+/**
+ * @param {number} value
+ * @return {boolean}
+ * @nosideeffects
+ * @see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Number/isInteger
+ */
+Number.isInteger = function(value) {};
+
+/**
+ * @param {number} value
+ * @return {boolean}
+ * @nosideeffects
+ * @see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Number/isSafeInteger
+ */
+Number.isSafeInteger = function(value) {};
+
+
+
+/**
+ * @param {!Object} target
+ * @param {...Object} var_args
+ * @return {!Object}
+ * @see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Object/assign
+ */
+Object.assign = function(target, var_args) {};

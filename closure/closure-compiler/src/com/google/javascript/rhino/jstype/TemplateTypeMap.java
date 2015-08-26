@@ -41,6 +41,7 @@ package com.google.javascript.rhino.jstype;
 
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
+import com.google.javascript.rhino.jstype.JSType.EqCache;
 
 import java.io.Serializable;
 
@@ -181,6 +182,14 @@ public class TemplateTypeMap implements Serializable {
          resolvedTemplateValues.get(index);
   }
 
+  public JSType getConcreteTypeOfTemplateType(TemplateType key) {
+    JSType result = getTemplateType(key);
+    while (result.isTemplateType()) {
+      result = getTemplateType(result.toMaybeTemplateType());
+    }
+    return result;
+  }
+
   /**
    * An enum tracking the three different equivalence match states for a
    * template key-value pair.
@@ -195,14 +204,19 @@ public class TemplateTypeMap implements Serializable {
    */
   public boolean checkEquivalenceHelper(
       TemplateTypeMap that, EquivalenceMethod eqMethod) {
+    return checkEquivalenceHelper(that, eqMethod, EqCache.create());
+  }
+
+  public boolean checkEquivalenceHelper(TemplateTypeMap that,
+      EquivalenceMethod eqMethod, EqCache eqCache) {
     boolean result = false;
     if (!this.inRecursiveEquivalenceCheck &&
         !that.inRecursiveEquivalenceCheck) {
       this.inRecursiveEquivalenceCheck = true;
       that.inRecursiveEquivalenceCheck = true;
 
-      result = checkEquivalenceHelper(eqMethod, this, that)
-          && checkEquivalenceHelper(eqMethod, that, this);
+      result = checkEquivalenceHelper(eqMethod, this, that, eqCache)
+          && checkEquivalenceHelper(eqMethod, that, this, eqCache);
 
       this.inRecursiveEquivalenceCheck = false;
       that.inRecursiveEquivalenceCheck = false;
@@ -211,8 +225,7 @@ public class TemplateTypeMap implements Serializable {
   }
 
   private static boolean checkEquivalenceHelper(EquivalenceMethod eqMethod,
-    TemplateTypeMap thisMap,
-    TemplateTypeMap thatMap) {
+    TemplateTypeMap thisMap, TemplateTypeMap thatMap, EqCache eqCache) {
     ImmutableList<TemplateType> thisKeys = thisMap.getTemplateKeys();
     ImmutableList<TemplateType> thatKeys = thatMap.getTemplateKeys();
 
@@ -230,7 +243,7 @@ public class TemplateTypeMap implements Serializable {
         // key-value pairs involved.
         if (thisKey == thatKey) {
           EquivalenceMatch newMatchType = EquivalenceMatch.VALUE_MISMATCH;
-          if (thisType.checkEquivalenceHelper(thatType, eqMethod)) {
+          if (thisType.checkEquivalenceHelper(thatType, eqMethod, eqCache)) {
             newMatchType = EquivalenceMatch.VALUE_MATCH;
           }
 
