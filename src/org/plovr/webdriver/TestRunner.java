@@ -60,6 +60,9 @@ public class TestRunner {
     driver.get(url.toString());
     try {
       return runTest(driver);
+    } catch (Exception e) {
+      System.err.printf("TestRunner error: %s", e.toString());
+      return null;
     } finally {
       driver.quit();
     }

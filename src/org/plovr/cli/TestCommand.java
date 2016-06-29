@@ -8,6 +8,7 @@ import org.plovr.webdriver.TestRunner;
 import java.io.File;
 import java.io.IOException;
 import java.net.URL;
+import java.net.URLClassLoader;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -31,6 +32,14 @@ public class TestCommand extends AbstractCommandRunner<TestCommandOptions> {
       return 1;
     }
 
+    ClassLoader cl = ClassLoader.getSystemClassLoader();
+
+    URL[] urls = ((URLClassLoader)cl).getURLs();
+
+    for(URL url: urls){
+      System.out.println(url.getFile());
+    }
+
     try {
       executorService.submit(new ServeCommandRunner(options)).get();
     } catch (Exception e) {
@@ -50,7 +59,7 @@ public class TestCommand extends AbstractCommandRunner<TestCommandOptions> {
         int offset = 0;
         for (final String relativeTestPath : relativeTestPaths) {
           URL url = new URL(String.format("http://localhost:%d/test/%s/%s",
-              options.getPort(), config.getId(), relativeTestPath));
+                  options.getPort(), config.getId(), relativeTestPath));
           final TestRunner testRunner = new TestRunner(url, config.getWebDriverFactories(), timeout);
           testResults.add(executorService.schedule(new Callable<Boolean>() {
             @Override
@@ -69,12 +78,16 @@ public class TestCommand extends AbstractCommandRunner<TestCommandOptions> {
           try {
             result = testResult.get();
           } catch (Exception e) {
+            System.err.printf("Error: %s", e.toString());
+            e.printStackTrace();
           }
           if (!result) {
             exitCode = 1;
           }
         }
       }
+    } catch (Exception e) {
+      System.err.printf("Error: %s", e.toString());
     } finally {
       // TODO: Create a cleaner API to shut down the server.
       executorService.shutdownNow();
